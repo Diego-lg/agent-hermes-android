@@ -4,7 +4,7 @@
  * Neon, Warm Clay).
  */
 import React, {useEffect, useState} from 'react';
-import {View, ScrollView, TouchableOpacity, Text, TextInput, Switch, Alert, Animated} from 'react-native';
+import {View, ScrollView, TouchableOpacity, Text, TextInput, Alert, Animated} from 'react-native';
 import {useApp} from './AppContext';
 import {Field} from './atoms';
 import {useTheme, THEME_LIST, Theme, ThemeId} from './theme.tsx';
@@ -18,9 +18,12 @@ export default function SettingsScreen() {
   const {config, setConfig, client, connect, disconnect, logout, setScreen} = useApp();
   const {palette, spacing, type, radii} = useTheme();
   const [editing, setEditing] = useState(false);
+  // Seed draft from the live config when the editing form is closed, so
+  // opening it picks up the freshly-loaded config but a user's in-progress
+  // edits aren't clobbered when setConfig updates `config`.
   const [draft, setDraft] = useState(config);
+  useEffect(() => { if (!editing) setDraft(config); }, [config, editing]);
   const [showPwd, setShowPwd] = useState(false);
-  const [notifications, setNotifications] = useState(true);
   const [signingOut, setSigningOut] = useState(false);
   const [slideX] = useState(new Animated.Value(0));
   const [drive, setDrive] = useState<DriveConfig | null>(null);
@@ -206,9 +209,7 @@ export default function SettingsScreen() {
         </Section>
 
         <Section index="04" title="PREFERENCES">
-          <Row index="00" label="Notifications" value={notifications ? 'ON' : 'OFF'}
-            right={<Switch value={notifications} onValueChange={setNotifications} trackColor={{true: palette.accent, false: palette.surfaceAlt}} thumbColor={palette.bg} />} />
-          <Row index="01" label="Default Agent" value="NONE" onPress={() => setScreen('agents')} last />
+          <Row index="00" label="Default Agent" value="NONE" onPress={() => setScreen('agents')} last />
         </Section>
 
         <Section index="05" title="ACCOUNT">

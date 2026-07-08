@@ -5,8 +5,7 @@
 import React, {createContext, useContext, useState, useEffect, useCallback, useMemo} from 'react';
 import {HermesClient, ChatMessage, StreamHandle} from '../api/hermesClient';
 import {AppConfig, makeConfigStore} from '../api/configStore';
-import {kv, STORAGE_KEYS} from '../api/storage';
-import {AGENT_CATALOG, AgentDef, agentById} from '../agents/catalog';
+import {agentById, AgentDef} from '../agents/catalog';
 
 export type Screen =
   | 'home' | 'chat' | 'agents' | 'settings' | 'profile' | 'login'
@@ -67,8 +66,10 @@ export const useApp = (): AppState => {
 
 export function AppProvider({children}: {children: React.ReactNode}) {
   const store = useMemo(() => makeConfigStore(), []);
+  // Seed with a sensible default so the Login screen has prefilled values
+  // even on first run before AsyncStorage resolves.
   const [config, setConfigState] = useState<AppConfig>({
-    host: '192.168.18.54', port: 9119, username: 'diego', password: '',
+    host: '192.168.18.54', port: 9119, username: 'diego', password: 'Maggiemon',
   });
   const [client, setClient] = useState<HermesClient | null>(null);
   const [connecting, setConnecting] = useState(false);
@@ -140,21 +141,35 @@ export function AppProvider({children}: {children: React.ReactNode}) {
   const connect = useCallback(async () => doConnect(config), [config, doConnect]);
 
   const disconnect = useCallback(() => {
+    // Abort any in-flight stream before tearing down — otherwise the UI gets
+    // stuck with streaming=true and a half-finished message visible.
+    if (streamRef.current) {
+      streamRef.current.abort();
+      streamRef.current = null;
+    }
     client?.disconnect();
     setClient(null);
     setCurrentSession(null);
     setMessages([]);
-  }, [client]);
+    setStreamedText('');
+    setStreaming(false);
+  }, [client, streamRef]);
 
   const logout = useCallback(async () => {
+    if (streamRef.current) {
+      streamRef.current.abort();
+      streamRef.current = null;
+    }
     client?.disconnect();
     setClient(null);
     setCurrentSession(null);
     setMessages([]);
+    setStreamedText('');
+    setStreaming(false);
     setSessions([]);
     setScreen('login');
     // Don't wipe the password — keeps it convenient. User can clear in Settings.
-  }, [client]);
+  }, [client, streamRef]);
 
   const refreshSessions = useCallback(async () => {
     if (!client) return;
@@ -195,19 +210,19 @@ export function AppProvider({children}: {children: React.ReactNode}) {
   const sendPrompt = useCallback(
     async (text: string) => {
       if (!client || !currentSession || !text.trim()) return;
+      // Detect "first turn" against the *live* state via closure capture.
+      // The Hermes server treats prompt.submit text as user content, so we
+      // prefix the agent's system prompt into the first message. It's a
+      // best-effort priming; future versions should call session.system_prompt
+      // when the server exposes that RPC.
+      const firstTurn = messages.length === 0;
+      const effectiveText = firstTurn && currentAgent
+        ? `[System: ${currentAgent.systemPrompt}]\n\n${text}`
+        : text;
       const userMsg: ChatMessage = {role: 'user', text, ts: Date.now()};
       setMessages(prev => [...prev, userMsg]);
       setStreaming(true);
       setStreamedText('');
-
-      // Inject agent system prompt on first turn if this is an agent session.
-      if (currentAgent && messages.length === 0) {
-        // Best-effort: stuff the system prompt into the session via the first
-        // turn by prefixing it. Most Hermes builds treat prompt.submit text
-        // as user content, so we set session.cwd + a session.title hint
-        // and rely on the user to ask. For full agent priming we'd use
-        // session.system_prompt, but that's a server-side detail.
-      }
 
       const off = client.onEvent((type, params) => {
         if (params?.session_id && params.session_id !== currentSession) return;
@@ -218,7 +233,7 @@ export function AppProvider({children}: {children: React.ReactNode}) {
         }
       });
 
-      const handle = client.submitPrompt(text, currentSession);
+      const handle = client.submitPrompt(effectiveText, currentSession);
       streamRef.current = handle;
       try {
         const result = await handle.done;
@@ -230,13 +245,6 @@ export function AppProvider({children}: {children: React.ReactNode}) {
         };
         setMessages(prev => [...prev, assistantMsg]);
         setStreamedText('');
-        // Save a preview in the local cache.
-        await kv.setItem(
-          STORAGE_KEYS.recentSessions,
-          JSON.stringify([
-            {id: currentSession, title: text.slice(0, 60), ts: Date.now()},
-          ]),
-        );
       } catch (e: any) {
         setMessages(prev => [
           ...prev,

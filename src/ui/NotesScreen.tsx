@@ -58,7 +58,7 @@ export default function NotesScreen() {
       } as NoteMeta;
       setNotes(prev => [meta, ...prev]);
       setCurrentNoteId(note.id);
-      setScreen('noteEditor' as any);
+      setScreen('noteEditor');
     } catch (e: any) {
       Alert.alert('Could not create note', e?.message ?? String(e));
     }
@@ -186,7 +186,7 @@ export default function NotesScreen() {
               </Text>
               <TouchableOpacity
                 style={{flex: 1}}
-                onPress={() => { setCurrentNoteId(n.id); setScreen('noteEditor' as any); }}
+                onPress={() => { setCurrentNoteId(n.id); setScreen('noteEditor'); }}
                 onLongPress={() => onDelete(n)}>
                 <Text style={[type.body, {fontWeight: '600', fontSize: 14}]} numberOfLines={1}>
                   {n.name}

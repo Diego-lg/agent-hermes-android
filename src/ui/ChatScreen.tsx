@@ -3,12 +3,12 @@
  */
 import React, {useEffect, useRef, useState} from 'react';
 import {
-  View, FlatList, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Text, Animated,
+  View, FlatList, TextInput, TouchableOpacity, KeyboardAvoidingView,
+  Platform, Text, Animated, Clipboard,
 } from 'react-native';
 import {useApp} from './AppContext';
 import {useTheme} from './theme.tsx';
-import {agentById} from '../agents/catalog';
-import {ChevronLeftIcon, SendIcon, StopIcon, MicIcon, MicOffIcon, ArrowUpRightIcon} from './icons';
+import {ChevronLeftIcon, SendIcon, StopIcon, ArrowUpRightIcon} from './icons';
 
 interface ToolEvent {
   name: string;
@@ -28,22 +28,32 @@ export default function ChatScreen() {
   const {palette, spacing, type} = useTheme();
   const [draft, setDraft] = useState('');
   const [toolEvents, setToolEvents] = useState<ToolEvent[]>([]);
-  const [listening, setListening] = useState(false);
   const listRef = useRef<FlatList>(null);
   const cursor = useRef(new Animated.Value(0)).current;
   const isMono = palette.type === 'mono';
   const monoFont = Platform.select({ios: 'Menlo', android: 'monospace'});
   const fontFamily = isMono ? monoFont : undefined;
 
+  // Blink-loop the streaming caret. Started on `streaming===true`,
+  // torn down (stopped + zeroed) when streaming flips back to false so
+  // it doesn't keep running and using CPU after the response completes.
   useEffect(() => {
-    if (streaming) {
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(cursor, {toValue: 1, duration: 500, useNativeDriver: false}),
-          Animated.timing(cursor, {toValue: 0, duration: 500, useNativeDriver: false}),
-        ]),
-      ).start();
+    if (!streaming) {
+      cursor.stopAnimation();
+      cursor.setValue(0);
+      return;
     }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(cursor, {toValue: 1, duration: 500, useNativeDriver: false}),
+        Animated.timing(cursor, {toValue: 0, duration: 500, useNativeDriver: false}),
+      ]),
+    );
+    loop.start();
+    return () => {
+      loop.stop();
+      cursor.setValue(0);
+    };
   }, [streaming, cursor]);
 
   useEffect(() => {
@@ -68,19 +78,6 @@ export default function ChatScreen() {
     setDraft('');
     setToolEvents([]);
     void sendPrompt(text);
-  };
-
-  const onMicPress = () => {
-    // @ts-ignore
-    const SR = (global as any).SpeechRecognition || (global as any).webkitSpeechRecognition;
-    if (!SR) return;
-    const r = new SR();
-    r.lang = 'en-US'; r.interimResults = false; r.maxAlternatives = 1;
-    r.onresult = (e: any) => setDraft(prev => (prev ? prev + ' ' : '') + e.results[0][0].transcript);
-    r.onend = () => setListening(false);
-    r.onerror = () => setListening(false);
-    setListening(true);
-    r.start();
   };
 
   if (!currentSession) return <EmptyState setScreen={setScreen} />;
@@ -109,7 +106,7 @@ export default function ChatScreen() {
             {agent ? agent.name.toUpperCase() : 'CHAT'}
           </Text>
           <Text style={[type.monoMuted, {marginTop: 2, fontSize: 10}]}>
-            {currentSession.slice(0, 8)}…  ·  {formatTime(Date.now())}
+            {currentSession.slice(0, 8)}…
           </Text>
         </View>
         {AgentIcon ? (
@@ -140,11 +137,11 @@ export default function ChatScreen() {
             role={item.role}
             text={item.text}
             usage={item.usage}
-            isLast={index === displayMessages.length - 1}
             streaming={streaming && index === displayMessages.length - 1 && item.role === 'assistant'}
             cursor={cursor}
             agentPrefix={agentPrefix}
             fontFamily={fontFamily}
+            ts={item.ts}
           />
         )}
         contentContainerStyle={{padding: spacing.lg, paddingBottom: 12}}
@@ -181,10 +178,15 @@ export default function ChatScreen() {
             maxHeight: 120,
           }}
         />
-        <TouchableOpacity onPress={onMicPress} style={{padding: 6, marginBottom: 4}}>
-          {listening
-            ? <MicOffIcon size={16} color={palette.error} />
-            : <MicIcon size={16} color={palette.textDim} />}
+        <TouchableOpacity
+          onPress={async () => {
+            try {
+              const text: string = await Clipboard.getString();
+              if (text) setDraft(prev => prev ? prev + ' ' + text : text);
+            } catch {/* clipboard not available */}
+          }}
+          style={{padding: 6, marginBottom: 4}}>
+          <Text style={[type.mono, {color: palette.textDim, fontSize: 14}]}>⌘V</Text>
         </TouchableOpacity>
         {streaming ? (
           <TouchableOpacity onPress={abortStream} style={{padding: 6, marginBottom: 4}}>
@@ -244,15 +246,14 @@ const Message: React.FC<{
   role: 'user' | 'assistant';
   text: string;
   usage?: {output: number; context_percent: number};
-  isLast: boolean;
   streaming: boolean;
   cursor: Animated.Value;
   agentPrefix: string;
   fontFamily?: any;
-}> = ({role, text, usage, isLast, streaming, cursor, agentPrefix, fontFamily}) => {
+  ts: number;
+}> = ({role, text, usage, streaming, cursor, agentPrefix, fontFamily, ts}) => {
   const {palette, spacing, type} = useTheme();
   const isUser = role === 'user';
-  const ts = formatTime(Date.now());
   const cursorOpacity = streaming
     ? cursor.interpolate({inputRange: [0, 1], outputRange: [0, 1]})
     : 0;
@@ -264,7 +265,7 @@ const Message: React.FC<{
           {isUser ? '› YOU' : `▸ ${agentPrefix}`}
         </Text>
         <Text style={[type.monoMuted, {marginLeft: 8, color: palette.textGhost, fontSize: 10, fontFamily}]}>
-          {ts}
+          {formatTime(ts)}
         </Text>
         {usage ? (
           <Text style={[type.monoMuted, {marginLeft: 8, color: palette.textGhost, fontSize: 10, fontFamily}]}>
