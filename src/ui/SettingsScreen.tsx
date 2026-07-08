@@ -10,9 +10,42 @@ import {Field} from './atoms';
 import {useTheme, THEME_LIST, Theme, ThemeId} from './theme.tsx';
 import {useThemeController} from './ThemeController';
 import {AGENT_CATALOG} from '../agents/catalog';
-import {ChevronRightIcon, EyeIcon, EyeOffIcon, CheckIcon, InfoIcon, RefreshIcon, ZapIcon, CpuIcon, ServerIcon} from './icons';
+import {ChevronRightIcon, EyeIcon, EyeOffIcon, CheckIcon, InfoIcon, RefreshIcon, ZapIcon, CpuIcon, ServerIcon, SparklesIcon, TrashIcon, PlayIcon, StopIcon, Volume2Icon} from './icons';
 import {notesStore} from '../api/notesStore';
 import {DriveConfig} from '../api/googleDrive';
+import {useVoice} from './useVoice';
+import DocumentPicker from 'react-native-document-picker';
+import {YoloCapabilities} from '../api/configStore';
+import {
+  CAPABILITIES, CapabilityId, requestAll, getGrantedMap,
+} from '../api/permissions';
+import YoloScreen from './YoloScreen';
+
+/**
+ * Switch-style sublabel for the YOLO master toggle in Settings. Renders a
+ * tiny pill (color-coded) instead of pulling in a full RN Switch. The
+ * inner component reuses the same accent / muted colors as the rest of
+ * the Settings list so it visually disappears into the row.
+ */
+function YoloModeSublabel({on}: {on: boolean}) {
+  const {palette, type} = useTheme();
+  return (
+    <View style={{
+      paddingHorizontal: 8, paddingVertical: 3,
+      borderWidth: 1,
+      borderColor: on ? palette.accent : palette.border,
+      backgroundColor: on ? palette.accentMuted : 'transparent',
+      marginRight: 6,
+    }}>
+      <Text style={[type.mono, {
+        color: on ? palette.accent : palette.textMuted,
+        fontSize: 9, letterSpacing: 0.8,
+      }]}>
+        {on ? 'ON' : 'OFF'}
+      </Text>
+    </View>
+  );
+}
 
 export default function SettingsScreen() {
   const {config, setConfig, engine, engineClient, engineLabel, serverOnline, connect, disconnect, logout, setScreen, switchEngine} = useApp();
@@ -58,8 +91,81 @@ export default function SettingsScreen() {
   const [drive, setDrive] = useState<DriveConfig | null>(null);
   const [driveEmail, setDriveEmail] = useState<string | null>(null);
   const [draftClientId, setDraftClientId] = useState('');
+  // Local YOLO draft so the row can flip the master switch without
+  // bouncing the whole `config` state on every tap. Persisted on tap.
+  const [, setYoloDraft] = useState(true);
+  const [grantedCount, setGrantedCount] = useState(0);
+
+  const capSummary = (): string => {
+    const total = CAPABILITIES.length;
+    if (config.yoloMode) {
+      return `${grantedCount}/${total} granted · all on`;
+    }
+    const on = CAPABILITIES.filter(c =>
+      c.id === 'internet' || !!config.yoloCapabilities?.[c.id as CapabilityId]).length;
+    return `${on}/${total} on`;
+  };
+
+  const bulkGrant = async (): Promise<void> => {
+    setSigningOut(true);
+    try {
+      const g = await requestAll();
+      const ok = Object.values(g).filter(Boolean).length;
+      const tot = Object.values(g).length;
+      setGrantedCount(ok);
+      Alert.alert('YOLO granted', `${ok} / ${tot} capabilities granted by Android.\n\nIf a row still says NEEDS GRANT, that's an Android "deny once" — open Settings → Apps → android-hermes → Permissions to allow it manually.`);
+    } catch (e: any) {
+      Alert.alert('Grant failed', e?.message ?? String(e));
+    } finally {
+      setSigningOut(false);
+    }
+  };
+
+  const refreshGrantedCount = async (): Promise<void> => {
+    try {
+      const g = await getGrantedMap();
+      setGrantedCount(Object.values(g).filter(Boolean).length);
+    } catch {/* fine */}
+  };
 
   const {themeId, setTheme} = useThemeController();
+
+  // ----- Voice cloning (MiniMax) -----
+  const voice = useVoice();
+  const [cloneBusy, setCloneBusy] = useState(false);
+  const [cloneLabel, setCloneLabel] = useState('');
+  const [cloneErr, setCloneErr] = useState<string | null>(null);
+  const [cloneOk, setCloneOk] = useState<string | null>(null);
+
+  const onPickCloneFile = async () => {
+    if (cloneBusy) return;
+    setCloneErr(null); setCloneOk(null);
+    if (!voice.ready) { setCloneErr('Add your MiniMax API key first (AI ENGINE above).'); return; }
+    try {
+      const file = await DocumentPicker.pickSingle({
+        type: [DocumentPicker.types.audio, DocumentPicker.types.video],
+        copyTo: 'cachesDirectory',
+      });
+      const uri = (file.fileCopyUri ?? file.uri) as string;
+      if (!uri) { setCloneErr('Could not read the selected file.'); return; }
+      setCloneBusy(true);
+      const res = await voice.cloneFromFile(
+        {uri, name: file.name ?? 'clip', mime: file.type ?? undefined},
+        cloneLabel.trim() || file.name || 'Cloned voice',
+      );
+      if (res.ok) {
+        setCloneOk(`Voice ready: ${res.voiceId}`);
+        setCloneLabel('');
+      } else {
+        setCloneErr(res.error ?? 'Cloning failed.');
+      }
+    } catch (e: any) {
+      if (DocumentPicker.isCancel(e)) return;
+      setCloneErr(e?.message ?? String(e));
+    } finally {
+      setCloneBusy(false);
+    }
+  };
 
   useEffect(() => {
     (async () => {
@@ -72,6 +178,9 @@ export default function SettingsScreen() {
         } catch { /* token may be expired */ }
       }
     })();
+    // Refresh the granted-count chip whenever the user lands here, so the
+    // YOLO row summary reflects the current Android grant state.
+    void refreshGrantedCount();
   }, []);
 
   const onSave = async () => {
@@ -663,6 +772,109 @@ export default function SettingsScreen() {
           ) : null}
         </Section>
 
+        {/* ----- VOICE CLONING (MiniMax) ----- */}
+        <Section index="03b" title="VOICE CLONING · MINIMAX">
+          <View style={{flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingVertical: 8}}>
+            <View style={{marginTop: 2}}><Volume2Icon size={14} color={palette.accent} /></View>
+            <Text style={[type.bodyMuted, {flex: 1, color: palette.textMuted, fontSize: 11, lineHeight: 16}]}>
+              Upload an audio clip (mp3 / m4a / wav) or an .mp4 to clone a voice. 10s–5min, ≤20MB. The cloned voice becomes available for text-to-voice and voice-to-voice. Cloned voices expire after 7 days if unused.
+            </Text>
+          </View>
+
+          {!voice.ready ? (
+            <Text style={[type.bodyMuted, {color: palette.textDim, fontSize: 11, paddingVertical: 6}]}>
+              Add your MiniMax API key in AI ENGINE above to enable cloning.
+            </Text>
+          ) : (
+            <>
+              <Field label="VOICE LABEL (optional)" value={cloneLabel} onChangeText={setCloneLabel} autoCapitalize="none" />
+              <TouchableOpacity
+                onPress={onPickCloneFile}
+                disabled={cloneBusy}
+                style={{
+                  flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+                  paddingVertical: 12, marginTop: 4,
+                  backgroundColor: cloneBusy ? palette.surfaceAlt : palette.accent,
+                }}>
+                <SparklesIcon size={14} color={cloneBusy ? palette.textDim : palette.bg} />
+                <Text style={[type.h2, {color: cloneBusy ? palette.textDim : palette.bg, fontSize: 12, letterSpacing: 0.5}]}>
+                  {cloneBusy ? 'CLONING…' : 'PICK FILE & CLONE'}
+                </Text>
+              </TouchableOpacity>
+              {cloneErr ? (
+                <Text style={[type.bodyMuted, {color: palette.error, fontSize: 11, marginTop: 8}]}>{cloneErr}</Text>
+              ) : null}
+              {cloneOk ? (
+                <Text style={[type.bodyMuted, {color: palette.success, fontSize: 11, marginTop: 8}]}>{cloneOk}</Text>
+              ) : null}
+
+              {/* Registered clones */}
+              {voice.settings.clones.length > 0 ? (
+                <View style={{marginTop: spacing.md}}>
+                  <Text style={[type.label, {color: palette.textMuted, marginBottom: 6}]}>CLONED VOICES</Text>
+                  {voice.settings.clones.map(c => {
+                    const active = voice.settings.voiceId === c.voiceId && voice.settings.useClonedVoice;
+                    return (
+                      <View key={c.voiceId} style={{
+                        flexDirection: 'row', alignItems: 'center',
+                        paddingVertical: 10,
+                        borderTopWidth: 1, borderTopColor: palette.border,
+                      }}>
+                        <SparklesIcon size={13} color={active ? palette.accent : palette.highlight} />
+                        <View style={{flex: 1, marginLeft: 10}}>
+                          <Text style={[type.body, {color: active ? palette.accent : palette.text, fontSize: 13}]} numberOfLines={1}>
+                            {c.label}
+                          </Text>
+                          <Text style={[type.monoMuted, {color: palette.textDim, fontSize: 9, marginTop: 2}]} numberOfLines={1}>
+                            {c.voiceId}
+                          </Text>
+                        </View>
+                        <TouchableOpacity
+                          onPress={() => { voice.patch('voiceId', c.voiceId); voice.patch('useClonedVoice', true); }}
+                          hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}
+                          style={{padding: 6, marginRight: 4}}>
+                          {active ? <CheckIcon size={16} color={palette.accent} /> : <Text style={[type.mono, {color: palette.accent, fontSize: 10}]}>USE</Text>}
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          onPress={() => voice.speak('This is a preview of the cloned voice.')}
+                          hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}
+                          style={{padding: 6, marginRight: 4}}>
+                          <PlayIcon size={14} color={palette.textMuted} />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          onPress={() => voice.removeClone(c.voiceId)}
+                          hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}
+                          style={{padding: 6}}>
+                          <TrashIcon size={14} color={palette.error} />
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })}
+                </View>
+              ) : null}
+            </>
+          )}
+        </Section>
+
+        {/* ----- YOLO / INDEPENDENT MODE capabilities ----- */}
+        <Section index="04" title="INDEPENDENT · YOLO">
+          <Row index="00" label="YOLO mode"
+            value={config.yoloMode ? 'ON · all on' : 'OFF · per-capability'}
+            right={<YoloModeSublabel on={!!config.yoloMode} />}
+            onPress={() => {
+              const next = !config.yoloMode;
+              setConfig({...config, yoloMode: next});
+              void refreshGrantedCount();
+            }} />
+          <Row index="01" label="Manage capabilities"
+            value={capSummary()}
+            onPress={() => setScreen('yolo')} />
+          <Row index="02" label="Grant all"
+            value="request every permission"
+            right={<ZapIcon size={14} color={palette.highlight} />}
+            onPress={() => { void bulkGrant(); }} last />
+        </Section>
+
         {aiEditing ? (
           <View style={{
             backgroundColor: palette.surface,
@@ -694,7 +906,7 @@ export default function SettingsScreen() {
             The previous bottom-sheet modal is removed — the inline UI is
             the primary way to fetch + pick models. */}
 
-        <Section index="04" title="CLOUD — GOOGLE DRIVE">
+        <Section index="05" title="CLOUD — GOOGLE DRIVE">
           <Row index="00" label="Status" value={driveEmail ?? (drive ? 'NOT SIGNED IN' : 'NOT CONFIGURED')} />
           <Row index="01" label={drive ? 'OAuth Client ID' : 'Set Client ID'}
             value={drive ? `${drive.clientId.slice(0, 14)}…` : 'tap to add'}
@@ -721,11 +933,11 @@ export default function SettingsScreen() {
           ) : null}
         </Section>
 
-        <Section index="05" title="PREFERENCES">
+        <Section index="06" title="PREFERENCES">
           <Row index="00" label="Default Agent" value="NONE" onPress={() => setScreen('agents')} last />
         </Section>
 
-        <Section index="06" title="ACCOUNT">
+        <Section index="07" title="ACCOUNT">
           <SignOutRow signingOut={signingOut} slideX={slideX} onPress={onSignOut} />
         </Section>
 

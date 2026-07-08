@@ -25,11 +25,14 @@ import {
 } from '../api/ChatEngine';
 import {ChatOptions, ChatOptionsStore, makeChatOptionsStore, ModelsListStore, makeModelsListStore, SessionCacheStore, makeSessionCacheStore, SessionHistoryCacheStore, makeSessionHistoryCacheStore} from '../api/chatOptionsStore';
 import {kv, STORAGE_KEYS} from '../api/storage';
+import {ProviderConfig, ProviderConfigsStore, makeProviderConfigsStore, buildSeedConfigs} from '../api/providerConfigsStore';
+import {fetchProviderModels, PROVIDER_CATALOG} from '../api/providersCatalog';
 
 export type Screen =
   | 'home' | 'chat' | 'agents' | 'settings' | 'profile' | 'login'
   | 'notes' | 'noteEditor' | 'cron'
-  | 'sessions' | 'models' | 'profiles' | 'tasks' | 'skills' | 'workspace' | 'memory' | 'insights';
+  | 'sessions' | 'models' | 'profiles' | 'tasks' | 'skills' | 'workspace' | 'memory' | 'insights'
+  | 'yolo';
 
 export interface SessionInfo {
   id: string;
@@ -127,6 +130,16 @@ export interface AppState {
   activeProjectId: string | null;
   refreshProjects: () => Promise<void>;
   setActiveProject: (id: string | null) => Promise<void>;
+  /** Multi-provider config store (api keys, base urls, fetched model caches). */
+  providerConfigs: Record<string, ProviderConfig>;
+  /** Replace the full provider-configs map and persist it. */
+  setProviderConfigs: (map: Record<string, ProviderConfig>) => Promise<void>;
+  /** Update one provider config in place (auto-creates if missing). */
+  upsertProviderConfig: (cfg: Partial<ProviderConfig> & {providerId: string}) => Promise<void>;
+  /** Fetch the live model list for one provider from its REST endpoint. */
+  refreshProviderModels: (providerId: string) => Promise<void>;
+  /** Refresh all enabled providers in parallel. */
+  refreshAllEnabledProviders: () => Promise<void>;
 }
 
 const Ctx = createContext<AppState | null>(null);
@@ -148,6 +161,7 @@ export function AppProvider({children}: {children: React.ReactNode}) {
   const optsStore = useMemo(() => makeChatOptionsStore(), []);
   const modelsStore = useMemo(() => makeModelsListStore(), []);
   const sessionCache = useMemo(() => makeSessionCacheStore(), []);
+  const providerConfigsStore = useMemo(() => makeProviderConfigsStore(), []);
   const historyCache = useMemo(() => makeSessionHistoryCacheStore(), []);
   // Start with the hardcoded default so the UI can render immediately
   // (LoginScreen, etc.). The real saved config is loaded async in the
@@ -214,13 +228,14 @@ export function AppProvider({children}: {children: React.ReactNode}) {
     let cancelled = false;
     (async () => {
       try {
-        const [opts, rec, fav, sc, prof, ws] = await Promise.all([
+        const [opts, rec, fav, sc, prof, ws, savedProviders] = await Promise.all([
           optsStore.load(),
           modelsStore.getRecents(),
           modelsStore.getFavorites(),
           sessionCache.load(),
           kv.getItem(STORAGE_KEYS.activeProfile),
           kv.getItem(STORAGE_KEYS.activeWorkspace),
+          providerConfigsStore.load(),
         ]);
         if (cancelled) return;
         setChatOptionsState(opts);
@@ -229,12 +244,24 @@ export function AppProvider({children}: {children: React.ReactNode}) {
         setCachedSessions(sc);
         setActiveProfileState(prof);
         setActiveWorkspaceState(ws);
+        // If nothing is saved yet, seed from the legacy single-provider config.
+        if (Object.keys(savedProviders).length === 0) {
+          const seed = buildSeedConfigs({
+            legacyModelApiKey: config.modelApiKey,
+            legacyModelBaseUrl: config.modelBaseUrl,
+            legacyModelGroupId: config.modelGroupId,
+          });
+          await providerConfigsStore.save(seed);
+          setProviderConfigsState(seed);
+        } else {
+          setProviderConfigsState(savedProviders);
+        }
       } catch {
         /* fine — defaults stay */
       }
     })();
     return () => { cancelled = true; };
-  }, [optsStore, modelsStore, sessionCache]);
+  }, [optsStore, modelsStore, sessionCache, providerConfigsStore, config.modelApiKey, config.modelBaseUrl, config.modelGroupId]);
 
   const [currentSession, setCurrentSession] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -262,6 +289,8 @@ export function AppProvider({children}: {children: React.ReactNode}) {
   const [activeWorkspace, setActiveWorkspaceState] = useState<string | null>(null);
   const [projects, setProjects] = useState<any[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [providerConfigs, setProviderConfigsState] = useState<Record<string, ProviderConfig>>({});
+  const [refreshingProviders, setRefreshingProviders] = useState<Set<string>>(new Set());
 
   const setConfig = useCallback(
     (c: AppConfig) => {
@@ -716,6 +745,63 @@ export function AppProvider({children}: {children: React.ReactNode}) {
     }
   }, [engine]);
 
+  const setProviderConfigs = useCallback(async (map: Record<string, ProviderConfig>) => {
+    setProviderConfigsState(map);
+    await providerConfigsStore.save(map);
+  }, [providerConfigsStore]);
+
+  const upsertProviderConfig = useCallback(async (cfg: Partial<ProviderConfig> & {providerId: string}) => {
+    const cur = await providerConfigsStore.load();
+    const existing = cur[cfg.providerId] ?? {providerId: cfg.providerId, enabled: false};
+    const next = {...cur, [cfg.providerId]: {...existing, ...cfg}};
+    setProviderConfigsState(next);
+    await providerConfigsStore.save(next);
+  }, [providerConfigsStore]);
+
+  const refreshProviderModels = useCallback(async (providerId: string) => {
+    const cur = await providerConfigsStore.load();
+    const cfg = cur[providerId];
+    if (!cfg) return;
+    setRefreshingProviders(prev => new Set(prev).add(providerId));
+    try {
+      const def = PROVIDER_CATALOG.find(p => p.id === providerId);
+      if (!def) return;
+      const result = await fetchProviderModels(def, {
+        apiKey: cfg.apiKey,
+        groupId: cfg.groupId,
+        baseUrlOverride: cfg.baseUrl,
+      });
+      const updated: Record<string, ProviderConfig> = {...cur};
+      if (result.ok) {
+        updated[providerId] = {
+          ...cfg,
+          models: result.models,
+          fetchedAt: Date.now(),
+          lastError: undefined,
+        };
+      } else {
+        updated[providerId] = {
+          ...cfg,
+          lastError: result.error,
+        };
+      }
+      setProviderConfigsState(updated);
+      await providerConfigsStore.save(updated);
+    } finally {
+      setRefreshingProviders(prev => {
+        const next = new Set(prev);
+        next.delete(providerId);
+        return next;
+      });
+    }
+  }, [providerConfigsStore]);
+
+  const refreshAllEnabledProviders = useCallback(async () => {
+    const cur = await providerConfigsStore.load();
+    const enabled = Object.values(cur).filter(c => c.enabled);
+    await Promise.allSettled(enabled.map(c => refreshProviderModels(c.providerId)));
+  }, [providerConfigsStore, refreshProviderModels]);
+
   const abortStream = useCallback(() => {
     streamRef.current?.abort();
     setStreaming(false);
@@ -787,6 +873,11 @@ export function AppProvider({children}: {children: React.ReactNode}) {
     activeProjectId,
     refreshProjects,
     setActiveProject,
+    providerConfigs,
+    setProviderConfigs,
+    upsertProviderConfig,
+    refreshProviderModels,
+    refreshAllEnabledProviders,
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

@@ -63,4 +63,8 @@ export const STORAGE_KEYS = {
   // Active profile (server-side Hermes profile) and active workspace
   activeProfile: 'hermes.activeProfile',
   activeWorkspace: 'hermes.activeWorkspace',
+  // Multi-provider API key + per-provider model cache
+  providerConfigs: 'hermes.providerConfigs',
+  // MiniMax voice assistant settings (TTS model, voice, cloned voice, etc.)
+  voiceSettings: 'hermes.voiceSettings',
 } as const;

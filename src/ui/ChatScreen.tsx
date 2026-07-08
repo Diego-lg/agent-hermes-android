@@ -18,10 +18,12 @@ import {
   ChevronLeftIcon, SendIcon, StopIcon, ArrowUpRightIcon, LightbulbIcon,
   CopyIcon, CheckIcon, PaperclipIcon, CameraIcon, XIcon, CpuIcon,
   ChevronDownIcon, CompassIcon, UserIcon, RefreshIcon,
+  Volume2Icon, VolumeXIcon, MicIcon, MicOffIcon, WaveIcon,
 } from './icons';
 import MarkdownText from './MarkdownText';
 import {launchImageLibrary, launchCamera} from 'react-native-image-picker';
 import DocumentPicker from 'react-native-document-picker';
+import {useVoice} from './useVoice';
 
 interface ToolEvent {
   name: string;
@@ -55,6 +57,60 @@ export default function ChatScreen() {
   const isMono = palette.type === 'mono';
   const monoFont = Platform.select({ios: 'Menlo', android: 'monospace'});
   const fontFamily = isMono ? monoFont : undefined;
+
+  // ----- Voice Assistant MODE (MiniMax) -----
+  const voice = useVoice();
+  const [voiceMode, setVoiceMode] = useState(false);
+  const spokenRef = useRef(0);
+
+  // Auto-speak the newest completed assistant reply while Voice Mode is on.
+  useEffect(() => {
+    if (!voiceMode || !voice.settings.autoSpeak || streaming) return;
+    if (messages.length <= spokenRef.current) return;
+    const last = messages[messages.length - 1];
+    spokenRef.current = messages.length;
+    if (last && last.role === 'assistant' && last.text && last.text.trim()) {
+      void voice.speak(last.text);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, streaming, voiceMode]);
+
+  // Mirror the live transcript into the composer while listening.
+  useEffect(() => {
+    if (voice.listening) setDraft(voice.transcript);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voice.transcript, voice.listening]);
+
+  const onToggleVoiceMode = useCallback(() => {
+    if (!voice.ready) {
+      Alert.alert('Voice needs MiniMax', 'Add your MiniMax API key in Settings → AI to use the Voice Assistant.');
+      return;
+    }
+    setVoiceMode(v => {
+      const next = !v;
+      if (next) {
+        spokenRef.current = messages.length;
+      } else {
+        void voice.stopSpeaking();
+        void voice.stopListening();
+      }
+      return next;
+    });
+  }, [voice, messages.length]);
+
+  const onMic = useCallback(async () => {
+    if (voice.listening) { await voice.stopListening(); return; }
+    setDraft('');
+    await voice.startListening({
+      onFinal: (t) => {
+        const clean = t.trim();
+        if (clean && !streaming) {
+          setDraft('');
+          void sendPrompt(clean);
+        }
+      },
+    });
+  }, [voice, streaming, sendPrompt]);
 
   useEffect(() => {
     if (!streaming) {
@@ -218,6 +274,23 @@ export default function ChatScreen() {
             {currentSession.slice(0, 8)}…
           </Text>
         </View>
+        {voice.minimaxSelected ? (
+          <TouchableOpacity
+            onPress={onToggleVoiceMode}
+            style={{
+              flexDirection: 'row', alignItems: 'center', gap: 5,
+              paddingHorizontal: 8, height: 28,
+              borderWidth: 1,
+              borderColor: voiceMode ? palette.accent : palette.border,
+              backgroundColor: voiceMode ? (palette.accentMuted ?? palette.surfaceAlt) : 'transparent',
+              marginRight: AgentIcon ? 8 : 0,
+            }}>
+            {voiceMode ? <Volume2Icon size={13} color={palette.accent} /> : <VolumeXIcon size={13} color={palette.textDim} />}
+            <Text style={[type.mono, {color: voiceMode ? palette.accent : palette.textDim, fontSize: 9, fontFamily: monoFont}]}>
+              VOICE
+            </Text>
+          </TouchableOpacity>
+        ) : null}
         {AgentIcon ? (
           <View style={{
             width: 28, height: 28,
@@ -246,6 +319,33 @@ export default function ChatScreen() {
         </Text>
         <ChevronDownIcon size={12} color={palette.textDim} />
       </TouchableOpacity>
+
+      {/* Voice Assistant MODE banner */}
+      {voiceMode ? (
+        <View style={{
+          flexDirection: 'row', alignItems: 'center',
+          paddingHorizontal: spacing.lg, paddingVertical: 8,
+          borderBottomWidth: 1, borderBottomColor: palette.accent,
+          backgroundColor: palette.accentMuted ?? palette.surfaceAlt,
+        }}>
+          {voice.listening ? <MicIcon size={13} color={palette.accent} /> : <Volume2Icon size={13} color={palette.accent} />}
+          <Text style={[type.mono, {color: palette.accent, fontSize: 10, marginLeft: 8, flex: 1, fontFamily: monoFont}]} numberOfLines={1}>
+            VOICE ASSISTANT · {voice.listening ? 'LISTENING…' : voice.speaking ? 'SPEAKING…' : (voice.settings.useClonedVoice ? 'CLONED VOICE' : voice.settings.speechModel)}
+          </Text>
+          {voice.speaking ? (
+            <TouchableOpacity onPress={() => void voice.stopSpeaking()} hitSlop={{top:6,bottom:6,left:6,right:6}} style={{padding: 4}}>
+              <StopIcon size={13} color={palette.error} filled />
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ) : null}
+      {voiceMode && !voice.audioAvailable ? (
+        <View style={{paddingHorizontal: spacing.lg, paddingVertical: 6, backgroundColor: palette.surfaceAlt}}>
+          <Text style={[type.monoMuted, {color: palette.textDim, fontSize: 9, fontFamily: monoFont}]}>
+            audio module not linked — run a native rebuild to enable playback / mic
+          </Text>
+        </View>
+      ) : null}
 
       {/* Attachments strip */}
       {pendingAttachments.length > 0 ? (
@@ -320,6 +420,13 @@ export default function ChatScreen() {
         <TouchableOpacity onPress={() => onPickImage(false)} style={{padding: 6, marginBottom: 6, marginLeft: 2}} hitSlop={{top:6, bottom:6, left:6, right:6}}>
           <CameraIcon size={16} color={palette.textDim} />
         </TouchableOpacity>
+        {voiceMode ? (
+          <TouchableOpacity onPress={() => void onMic()} style={{padding: 6, marginBottom: 6, marginLeft: 2}} hitSlop={{top:6, bottom:6, left:6, right:6}}>
+            {voice.listening
+              ? <MicIcon size={16} color={palette.accent} />
+              : <MicOffIcon size={16} color={palette.textDim} />}
+          </TouchableOpacity>
+        ) : null}
         <Text style={[type.mono, {color: palette.textMuted, paddingBottom: 12, marginLeft: 8, fontSize: 14}]}>›</Text>
         <TextInput
           value={draft}

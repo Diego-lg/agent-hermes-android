@@ -25,6 +25,7 @@ import SkillsScreen from './src/ui/SkillsScreen';
 import WorkspaceScreen from './src/ui/WorkspaceScreen';
 import MemoryScreen from './src/ui/MemoryScreen';
 import InsightsScreen from './src/ui/InsightsScreen';
+import YoloScreen from './src/ui/YoloScreen';
 import {notesStore} from './src/api/notesStore';
 
 function Shell() {
@@ -87,12 +88,14 @@ function Shell() {
         {screen === 'workspace' && <WorkspaceScreen />}
         {screen === 'memory' && <MemoryScreen />}
         {screen === 'insights' && <InsightsScreen />}
+        {screen === 'yolo' && <YoloScreen onClose={() => setScreen('settings')} />}
       </View>
       <BottomNav
         active={tab}
         onChange={s => setScreen(s as any)}
         hasSession={!!currentSession}
         notesReady={notesReady}
+        hidden={screen === 'yolo'}
       />
     </View>
   );

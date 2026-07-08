@@ -7,6 +7,25 @@
  */
 import {kv, STORAGE_KEYS} from './storage';
 
+/**
+ * Per-capability toggle for YOLO / Independent mode. When `yoloMode` is
+ * `true`, every capability below is treated as allowed and the engine
+ * should request the corresponding runtime permission on first use. When
+ * `false`, individual rows can still be ticked on a case-by-case basis.
+ */
+export interface YoloCapabilities {
+  internet: boolean;     // always true — kept here for shape stability
+  files: boolean;
+  photos: boolean;
+  camera: boolean;
+  microphone: boolean;
+  location: boolean;
+  notifications: boolean;
+  contacts: boolean;
+  calendar: boolean;
+  phone: boolean;
+}
+
 export interface AppConfig {
   host: string;
   port: number;
@@ -23,6 +42,13 @@ export interface AppConfig {
   /** Optional GroupId sent as `GroupId:` header. Required by some MiniMax
    *  model series (e.g. abab/M-series) for /models + /chat/completions. */
   modelGroupId?: string;
+  /** Master YOLO switch. When true, every YOLO capability is allowed. The
+   *  `yoloCapabilities` map is the user's per-capability override — when
+   *  YOLO is on, those overrides don't apply (master wins). When YOLO is
+   *  off, the per-cap map tells us which subsets are still allowed. */
+  yoloMode?: boolean;
+  /** Per-capability opt-ins, used when YOLO is off. */
+  yoloCapabilities?: Partial<YoloCapabilities>;
 }
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -33,6 +59,20 @@ const DEFAULT_CONFIG: AppConfig = {
   modelBaseUrl: 'https://api.minimax.io/v1',
   modelId: 'MiniMax-Text-01',
   engineMode: 'auto',
+  /** YOLO ON by default — independent mobile mode grants the agent
+   *  everything. The user can dial it back from Settings → YOLO. */
+  yoloMode: true,
+  yoloCapabilities: {
+    files: true,
+    photos: true,
+    camera: true,
+    microphone: true,
+    location: true,
+    notifications: true,
+    contacts: true,
+    calendar: true,
+    phone: true,
+  },
 };
 
 export interface ConfigStore {

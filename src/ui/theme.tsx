@@ -293,10 +293,202 @@ const warmClay = {
 };
 
 /* ============================================================================
+ * AURORA  —  premium indigo dark, electric periwinkle accent, soft rounded
+ *            (the modern "product app" dark: Linear / Vercel / Raycast)
+ * ========================================================================== */
+
+const aurora = {
+  id: 'aurora',
+  meta: {
+    name: 'Aurora',
+    tagline: 'Indigo dark · vivid · Linear',
+    swatches: ['#0a0b12', '#8b7cff', '#eceef5'] as [string, string, string],
+  },
+  palette: {
+    bg: '#0a0b12',
+    surface: '#12141f',
+    surfaceAlt: '#1a1d2b',
+    border: '#24273a',
+    borderStrong: '#3a3f5a',
+    text: '#eceef5',
+    textMuted: '#9ca1bd',
+    textDim: '#6b6f8a',
+    textGhost: '#2c2f42',
+    accent: '#8b7cff',
+    accentDim: '#6d5ce6',
+    accentMuted: 'rgba(139, 124, 255, 0.16)',
+    success: '#4ade80',
+    error: '#fb7185',
+    highlight: '#22d3ee',
+    type: 'sans' as const,
+  },
+  type: {
+    display: {fontSize: 34, fontWeight: '700' as const, letterSpacing: -1, lineHeight: 40, fontFamily: displayFamily},
+    displaySmall: {fontSize: 24, fontWeight: '700' as const, letterSpacing: -0.5, lineHeight: 30, fontFamily: displayFamily},
+    h1: {fontSize: 17, fontWeight: '600' as const, letterSpacing: -0.3, lineHeight: 24, fontFamily: displayFamily},
+    h2: {fontSize: 15, fontWeight: '600' as const, letterSpacing: -0.2, lineHeight: 20, fontFamily: displayFamily},
+    body: {fontSize: 15, lineHeight: 22, letterSpacing: -0.2, fontFamily: displayFamily},
+    bodyMuted: {fontSize: 15, lineHeight: 22, letterSpacing: -0.2, fontFamily: displayFamily},
+    label: {fontSize: 10, letterSpacing: 1.4, fontWeight: '600' as const, textTransform: 'uppercase' as const, fontFamily: displayFamily},
+    mono: {fontSize: 13, letterSpacing: 0, fontFamily: monoFamily, fontVariant: ['tabular-nums' as const]},
+    monoMuted: {fontSize: 12, letterSpacing: 0, fontFamily: monoFamily, fontVariant: ['tabular-nums' as const]},
+    num: {fontSize: 30, fontWeight: '700' as const, letterSpacing: -0.8, lineHeight: 32, fontFamily: displayFamily, fontVariant: ['tabular-nums' as const]},
+    numSmall: {fontSize: 15, fontWeight: '600' as const, letterSpacing: -0.2, fontFamily: displayFamily, fontVariant: ['tabular-nums' as const]},
+  },
+  spacing: {xxs: 2, xs: 6, sm: 10, md: 14, lg: 20, xl: 28, xxl: 40, xxxl: 56},
+  radii: {none: 0, sm: 8, md: 12, lg: 16, xl: 24, pill: 999},
+};
+
+/* ============================================================================
+ * DAYLIGHT  —  clean bright light, modern blue accent, comfortable radii
+ *              (Notion / Things: the friendliest, easiest-to-read option)
+ * ========================================================================== */
+
+const daylight = {
+  id: 'daylight',
+  meta: {
+    name: 'Daylight',
+    tagline: 'Bright · blue · Notion',
+    swatches: ['#ffffff', '#3b6ef6', '#17181c'] as [string, string, string],
+  },
+  palette: {
+    bg: '#ffffff',
+    surface: '#f7f8fa',
+    surfaceAlt: '#eef0f4',
+    border: '#e4e7ec',
+    borderStrong: '#cfd4dc',
+    text: '#17181c',
+    textMuted: '#5c6373',
+    textDim: '#9aa0ae',
+    textGhost: '#d7dbe2',
+    accent: '#3b6ef6',
+    accentDim: '#2452d6',
+    accentMuted: 'rgba(59, 110, 246, 0.10)',
+    success: '#16a34a',
+    error: '#e5484d',
+    highlight: '#f59e0b',
+    type: 'sans' as const,
+  },
+  type: {
+    display: {fontSize: 33, fontWeight: '700' as const, letterSpacing: -1, lineHeight: 38, fontFamily: displayFamily},
+    displaySmall: {fontSize: 23, fontWeight: '700' as const, letterSpacing: -0.5, lineHeight: 28, fontFamily: displayFamily},
+    h1: {fontSize: 17, fontWeight: '600' as const, letterSpacing: -0.3, lineHeight: 24, fontFamily: displayFamily},
+    h2: {fontSize: 15, fontWeight: '600' as const, letterSpacing: -0.2, lineHeight: 20, fontFamily: displayFamily},
+    body: {fontSize: 15, lineHeight: 22, letterSpacing: -0.2, fontFamily: displayFamily},
+    bodyMuted: {fontSize: 15, lineHeight: 22, letterSpacing: -0.2, fontFamily: displayFamily},
+    label: {fontSize: 10, letterSpacing: 1.4, fontWeight: '600' as const, textTransform: 'uppercase' as const, fontFamily: displayFamily},
+    mono: {fontSize: 13, letterSpacing: 0, fontFamily: monoFamily, fontVariant: ['tabular-nums' as const]},
+    monoMuted: {fontSize: 12, letterSpacing: 0, fontFamily: monoFamily, fontVariant: ['tabular-nums' as const]},
+    num: {fontSize: 30, fontWeight: '700' as const, letterSpacing: -0.8, lineHeight: 32, fontFamily: displayFamily, fontVariant: ['tabular-nums' as const]},
+    numSmall: {fontSize: 15, fontWeight: '600' as const, letterSpacing: -0.2, fontFamily: displayFamily, fontVariant: ['tabular-nums' as const]},
+  },
+  spacing: {xxs: 2, xs: 6, sm: 10, md: 14, lg: 20, xl: 28, xxl: 40, xxxl: 56},
+  radii: {none: 0, sm: 6, md: 10, lg: 14, xl: 20, pill: 999},
+};
+
+/* ============================================================================
+ * SAGE  —  calm nature light, emerald accent, soft generous rounding
+ *          (a restful, wellness-app feel — easy on the eyes for long reads)
+ * ========================================================================== */
+
+const sage = {
+  id: 'sage',
+  meta: {
+    name: 'Sage',
+    tagline: 'Calm · emerald · natural',
+    swatches: ['#f4f6f2', '#3f7d5a', '#232a20'] as [string, string, string],
+  },
+  palette: {
+    bg: '#f4f6f2',
+    surface: '#eaeee4',
+    surfaceAlt: '#dfe5d5',
+    border: '#d0d8c2',
+    borderStrong: '#a9b892',
+    text: '#232a20',
+    textMuted: '#57624e',
+    textDim: '#8a957e',
+    textGhost: '#c3ccb5',
+    accent: '#3f7d5a',
+    accentDim: '#2c5c40',
+    accentMuted: 'rgba(63, 125, 90, 0.13)',
+    success: '#4f9d69',
+    error: '#b3543f',
+    highlight: '#c79a3e',
+    type: 'sans' as const,
+  },
+  type: {
+    display: {fontSize: 33, fontWeight: '700' as const, letterSpacing: -0.8, lineHeight: 39, fontFamily: displayFamily},
+    displaySmall: {fontSize: 24, fontWeight: '700' as const, letterSpacing: -0.4, lineHeight: 30, fontFamily: displayFamily},
+    h1: {fontSize: 17, fontWeight: '600' as const, letterSpacing: -0.2, lineHeight: 24, fontFamily: displayFamily},
+    h2: {fontSize: 15, fontWeight: '600' as const, letterSpacing: -0.1, lineHeight: 20, fontFamily: displayFamily},
+    body: {fontSize: 15, lineHeight: 23, letterSpacing: -0.1, fontFamily: displayFamily},
+    bodyMuted: {fontSize: 15, lineHeight: 23, letterSpacing: -0.1, fontFamily: displayFamily},
+    label: {fontSize: 10, letterSpacing: 1.6, fontWeight: '600' as const, textTransform: 'uppercase' as const, fontFamily: displayFamily},
+    mono: {fontSize: 13, letterSpacing: 0, fontFamily: monoFamily, fontVariant: ['tabular-nums' as const]},
+    monoMuted: {fontSize: 12, letterSpacing: 0, fontFamily: monoFamily, fontVariant: ['tabular-nums' as const]},
+    num: {fontSize: 30, fontWeight: '700' as const, letterSpacing: -0.6, lineHeight: 32, fontFamily: displayFamily, fontVariant: ['tabular-nums' as const]},
+    numSmall: {fontSize: 15, fontWeight: '600' as const, letterSpacing: -0.1, fontFamily: displayFamily, fontVariant: ['tabular-nums' as const]},
+  },
+  spacing: {xxs: 2, xs: 6, sm: 10, md: 14, lg: 20, xl: 28, xxl: 40, xxxl: 56},
+  radii: {none: 0, sm: 8, md: 14, lg: 20, xl: 28, pill: 999},
+};
+
+/* ============================================================================
+ * CARBON  —  sophisticated neutral dark, mint/teal accent, soft rounded
+ *            (a refined developer-tool dark that isn't pure OLED black)
+ * ========================================================================== */
+
+const carbon = {
+  id: 'carbon',
+  meta: {
+    name: 'Carbon',
+    tagline: 'Graphite · mint · refined',
+    swatches: ['#0d0f0e', '#2dd4a7', '#e8ece9'] as [string, string, string],
+  },
+  palette: {
+    bg: '#0d0f0e',
+    surface: '#141817',
+    surfaceAlt: '#1c2220',
+    border: '#262d2a',
+    borderStrong: '#3b443f',
+    text: '#e8ece9',
+    textMuted: '#97a29b',
+    textDim: '#667069',
+    textGhost: '#2a312e',
+    accent: '#2dd4a7',
+    accentDim: '#1fae88',
+    accentMuted: 'rgba(45, 212, 167, 0.14)',
+    success: '#4ade80',
+    error: '#f87171',
+    highlight: '#fbbf24',
+    type: 'sans' as const,
+  },
+  type: {
+    display: {fontSize: 34, fontWeight: '700' as const, letterSpacing: -1, lineHeight: 40, fontFamily: displayFamily},
+    displaySmall: {fontSize: 24, fontWeight: '700' as const, letterSpacing: -0.5, lineHeight: 30, fontFamily: displayFamily},
+    h1: {fontSize: 17, fontWeight: '600' as const, letterSpacing: -0.3, lineHeight: 24, fontFamily: displayFamily},
+    h2: {fontSize: 15, fontWeight: '600' as const, letterSpacing: -0.2, lineHeight: 20, fontFamily: displayFamily},
+    body: {fontSize: 15, lineHeight: 22, letterSpacing: -0.2, fontFamily: displayFamily},
+    bodyMuted: {fontSize: 15, lineHeight: 22, letterSpacing: -0.2, fontFamily: displayFamily},
+    label: {fontSize: 10, letterSpacing: 1.4, fontWeight: '600' as const, textTransform: 'uppercase' as const, fontFamily: displayFamily},
+    mono: {fontSize: 13, letterSpacing: 0, fontFamily: monoFamily, fontVariant: ['tabular-nums' as const]},
+    monoMuted: {fontSize: 12, letterSpacing: 0, fontFamily: monoFamily, fontVariant: ['tabular-nums' as const]},
+    num: {fontSize: 30, fontWeight: '700' as const, letterSpacing: -0.8, lineHeight: 32, fontFamily: displayFamily, fontVariant: ['tabular-nums' as const]},
+    numSmall: {fontSize: 15, fontWeight: '600' as const, letterSpacing: -0.2, fontFamily: displayFamily, fontVariant: ['tabular-nums' as const]},
+  },
+  spacing: {xxs: 2, xs: 6, sm: 10, md: 14, lg: 20, xl: 28, xxl: 40, xxxl: 56},
+  radii: {none: 0, sm: 6, md: 10, lg: 16, xl: 22, pill: 999},
+};
+
+/* ============================================================================
  * Registry + React context
  * ========================================================================== */
 
 export const THEMES = {
+  aurora,
+  daylight,
+  sage,
+  carbon,
   industrial,
   brutalist,
   softGlass,
@@ -307,6 +499,27 @@ export const THEMES = {
 
 export type ThemeId = keyof typeof THEMES;
 export type Theme = (typeof THEMES)[ThemeId];
+
+/* ----------------------------------------------------------------------------
+ * Default text color per theme.
+ *
+ * The `type` scale intentionally carries no color, and React Native's <Text>
+ * does NOT inherit color from ancestor <View>s — so a `<Text style={type.body}>`
+ * with no explicit color falls back to the platform default (black), which is
+ * invisible on dark backgrounds. We fix that once, here, by stamping each
+ * theme's own `palette.text` onto every type token that doesn't already set a
+ * color. Call sites that pass an explicit color (e.g. `{color: palette.bg}` on
+ * accent buttons, or muted/dim captions) still win, because their style object
+ * is applied AFTER the type token in the style array.
+ * ------------------------------------------------------------------------- */
+for (const t of Object.values(THEMES)) {
+  for (const key of Object.keys(t.type)) {
+    const entry = (t.type as any)[key];
+    if (entry && typeof entry === 'object' && entry.color === undefined) {
+      entry.color = t.palette.text;
+    }
+  }
+}
 
 export const THEME_LIST: Theme[] = Object.values(THEMES);
 export const DEFAULT_THEME: ThemeId = 'industrial';

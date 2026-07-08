@@ -8,6 +8,7 @@ import {useApp} from './AppContext';
 import {useTheme} from './theme.tsx';
 import {PlusIcon, RefreshIcon, ChevronRightIcon} from './icons';
 import {AGENT_CATALOG} from '../agents/catalog';
+import YoloBanner from './YoloBanner';
 
 export default function HomeScreen() {
   const {
@@ -93,7 +94,10 @@ export default function HomeScreen() {
           <Text style={[type.monoMuted, {color: palette.textGhost, fontSize: 9, marginLeft: 6, letterSpacing: 0.5}]}>
             HOLD TO SWITCH
           </Text>
-        </TouchableOpacity>
+      </TouchableOpacity>
+
+        {/* YOLO / independent-mode banner. Tap to jump to the full YOLO screen. */}
+        <YoloBanner onPress={() => setScreen('yolo')} />
 
         {/* Greeting */}
         <Text style={[type.display, {marginTop: spacing.sm}]}>

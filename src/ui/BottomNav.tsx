@@ -30,9 +30,11 @@ export type Tab =
 
 interface BottomNavProps {
   active: Tab;
-  onChange: (t: Tab) => void;
+  onChange: (id: Tab) => void;
   hasSession?: boolean;
   notesReady?: boolean;
+  /** Hide the entire nav (used while a modal screen like YOLO is on top). */
+  hidden?: boolean;
 }
 
 interface TabDef {
@@ -103,7 +105,7 @@ const ActiveIndicator: React.FC<{
   );
 };
 
-export const BottomNav: React.FC<BottomNavProps> = ({active, onChange, hasSession, notesReady}) => {
+export const BottomNav: React.FC<BottomNavProps> = ({active, onChange, hasSession, notesReady, hidden}) => {
   const theme = useTheme();
   const {palette, type} = theme;
   const [moreOpen, setMoreOpen] = useState(false);
@@ -116,6 +118,8 @@ export const BottomNav: React.FC<BottomNavProps> = ({active, onChange, hasSessio
     setMoreOpen(false);
     onChange(id);
   };
+
+  if (hidden) return null;
 
   return (
     <SafeAreaView edges={['bottom']} style={{backgroundColor: palette.bg}}>

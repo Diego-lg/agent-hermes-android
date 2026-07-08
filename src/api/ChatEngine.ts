@@ -148,7 +148,7 @@ export class HermesEngine implements ChatEngine {
  *
  * POST {baseUrl}/chat/completions
  *   body: { model, messages, stream: true }
- *   Authorization: Bearer ${key}
+ *   Authorization: `Bearer ${key}
  *
  *   Reads NDJSON (one JSON object per line) shaped like:
  *     {"choices":[{"delta":{"content":"..."}, "finish_reason":null|"stop"}]}
@@ -173,12 +173,30 @@ interface LocalSession {
   messages: ChatMessage[];
 }
 
+/**
+ * A file/image that the user dropped onto the chat before sending the
+ * next message. The Minimax engine doesn't have a server-side attach
+ * channel, so we accumulate these and prepend their textual/visual
+ * content to the next user turn that gets shipped to the model API.
+ */
+export interface PendingAttachment {
+  id: string;
+  kind: 'file' | 'image';
+  name: string;
+  /** Plain text for files, base64 for images. */
+  content: string;
+  mime?: string;
+}
+
 export class MinimaxEngine implements ChatEngine {
   readonly id: EngineId = 'minimax';
   private currentSessionId: string | null = null;
   private abortControllers = new Map<string, AbortController>();
   private listeners = new Set<DeltaHandler>();
   private sessionCache: LocalSession[] = [];
+  /** Pending attachments keyed by session id. Each entry is consumed on
+   *  the next submitPrompt and inlined into the request. */
+  private pending = new Map<string, PendingAttachment[]>();
 
   constructor(private cfg: MinimaxConfig) {}
 
@@ -446,6 +464,21 @@ export class MinimaxEngine implements ChatEngine {
     });
 
     // Append the user turn to the local cache before we send.
+    // Drain any pending file/image attachments and inline them into the
+    // outgoing message so the cloud model API actually has the content
+    // to reason over. The user-facing chat still sees only the user's
+    // original text.
+    const pending = this.takePending(sid);
+    let outboundText = text;
+    if (pending.length) {
+      const blocks = pending.map(p => {
+        if (p.kind === 'image') {
+          return `[attachment: image ${p.name}]\n${p.content}`;
+        }
+        return `[attachment: file ${p.name} · ${p.mime ?? 'text/plain'}]\n${p.content}`;
+      });
+      outboundText = `${text}\n\n${blocks.join('\n\n')}`;
+    }
     sess.messages.push({role: 'user', text, ts: Date.now()});
     void this.persistCache();
 
@@ -480,7 +513,7 @@ export class MinimaxEngine implements ChatEngine {
           body: JSON.stringify({
             model: this.cfg.model,
             stream: true,
-            messages: history.concat([{role: 'user', content: text}]),
+            messages: history.concat([{role: 'user', content: outboundText}]),
           }),
         });
         if (!r.ok) {
@@ -541,6 +574,58 @@ export class MinimaxEngine implements ChatEngine {
     if (this.sessionCache.length === 0) await this.loadCache();
     const sess = this.sessionCache.find(s => s.id === sessionId);
     return sess?.messages ?? [];
+  }
+
+  /**
+   * Independent-mode file attach — accumulates the text into the
+   * per-session pending list and inlines it on the next submitPrompt.
+   *
+   * Why we don't ship base64:
+   *   - The MiniMax cloud endpoint doesn't accept the OpenAI multimodal
+   *     `image_url` shape for every model series, and the older text
+   *     models choke on raw base64 blobs. So we embed file text directly
+   *     into the next user message and let the agent quote / search it.
+   */
+  async attachFile(sessionId: string, payload: {name: string; content: string; mime?: string}): Promise<void> {
+    const list = this.pending.get(sessionId) ?? [];
+    const truncated = payload.content.length > 16_000
+      ? payload.content.slice(0, 16_000) + '\n\n[…truncated 16 KB limit — full content available on-device…]'
+      : payload.content;
+    list.push({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: 'file',
+      name: payload.name,
+      content: truncated,
+      mime: payload.mime,
+    });
+    this.pending.set(sessionId, list);
+  }
+
+  /**
+   * Independent-mode image attach — we don't have a true multimodal
+   * pipeline here, so we record the image as a note in the pending list
+   * and inline a small reference marker into the next user message. If
+   * the provider supports image_url in the future this can be upgraded
+   * without changing the API surface.
+   */
+  async attachImage(sessionId: string, payload: {name: string; data: string; mime?: string}): Promise<void> {
+    const list = this.pending.get(sessionId) ?? [];
+    const bytes = Math.floor((payload.data.length * 3) / 4); // rough base64 decode size
+    list.push({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: 'image',
+      name: payload.name,
+      content: `[image attached: ${payload.name} · ~${Math.round(bytes / 1024)} KB · mime=${payload.mime ?? 'image/any'} · base64 on-device; describe its contents or use ↗ on Android to share text describing it]`,
+      mime: payload.mime,
+    });
+    this.pending.set(sessionId, list);
+  }
+
+  /** Drain pending attachments for a session (called by submitPrompt). */
+  private takePending(sessionId: string): PendingAttachment[] {
+    const list = this.pending.get(sessionId) ?? [];
+    this.pending.set(sessionId, []);
+    return list;
   }
 
   disconnect(): void {

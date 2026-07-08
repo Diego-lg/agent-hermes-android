@@ -439,6 +439,46 @@ export const FolderFilled = make(
   <Path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
 );
 
+/* ---------- YOLO capability icons (Lucide-style) ---------- */
+
+export const ShieldIcon = make(
+  <Path d="M12 2 4 5v6c0 5 3.5 9.5 8 11 4.5-1.5 8-6 8-11V5z" />,
+);
+
+export const ShieldCheckIcon = make(
+  <>
+    <Path d="M12 2 4 5v6c0 5 3.5 9.5 8 11 4.5-1.5 8-6 8-11V5z" />
+    <Polyline points="9 12 11 14 15 10" />
+  </>,
+);
+
+export const ShieldOffIcon = make(
+  <>
+    <Path d="M12 2 4 5v6c0 5 3.5 9.5 8 11 4.5-1.5 8-6 8-11V5z" />
+    <Path d="M3 3l18 18" />
+  </>,
+);
+
+export const MapPinIcon = make(
+  <>
+    <Path d="M12 22s7-7.6 7-13a7 7 0 1 0-14 0c0 5.4 7 13 7 13z" />
+    <Circle cx="12" cy="9" r="2.5" />
+  </>,
+);
+
+export const PhoneIcon = make(
+  <Path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2 4.2 2 2 0 0 1 4 2h3a2 2 0 0 1 2 1.7c.1 1 .3 2 .6 2.9a2 2 0 0 1-.5 2.1L7.9 10a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.5c.9.3 1.9.5 2.9.6a2 2 0 0 1 1.7 2.1z" />,
+);
+
+export const CalendarIcon = make(
+  <>
+    <Rect x="3" y="5" width="18" height="16" rx="2" />
+    <Line x1="3" y1="10" x2="21" y2="10" />
+    <Line x1="8" y1="3" x2="8" y2="7" />
+    <Line x1="16" y1="3" x2="16" y2="7" />
+  </>,
+);
+
 export const DatabaseIcon = make(
   <>
     <Path d="M4 6c0-1.5 3.6-3 8-3s8 1.5 8 3-3.6 3-8 3-8-1.5-8-3z" />
@@ -503,5 +543,40 @@ export const CameraIcon = make(
   <>
     <Path d="M4 8h3l2-2h6l2 2h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" />
     <Circle cx="12" cy="13" r="3.5" />
+  </>,
+);
+
+/* ---------- Voice / audio ---------- */
+
+export const Volume2Icon = make(
+  <>
+    <Polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+    <Path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+    <Path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+  </>,
+);
+
+export const VolumeXIcon = make(
+  <>
+    <Polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+    <Line x1="23" y1="9" x2="17" y2="15" />
+    <Line x1="17" y1="9" x2="23" y2="15" />
+  </>,
+);
+
+export const WaveIcon = make(
+  <>
+    <Line x1="4" y1="10" x2="4" y2="14" />
+    <Line x1="8" y1="6" x2="8" y2="18" />
+    <Line x1="12" y1="3" x2="12" y2="21" />
+    <Line x1="16" y1="6" x2="16" y2="18" />
+    <Line x1="20" y1="10" x2="20" y2="14" />
+  </>,
+);
+
+export const SparklesIcon = make(
+  <>
+    <Path d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z" />
+    <Path d="M19 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z" />
   </>,
 );
