@@ -8,7 +8,9 @@ import {AppConfig, makeConfigStore} from '../api/configStore';
 import {kv, STORAGE_KEYS} from '../api/storage';
 import {AGENT_CATALOG, AgentDef, agentById} from '../agents/catalog';
 
-export type Screen = 'home' | 'chat' | 'agents' | 'settings' | 'profile' | 'login';
+export type Screen =
+  | 'home' | 'chat' | 'agents' | 'settings' | 'profile' | 'login'
+  | 'notes' | 'noteEditor' | 'cron';
 
 export interface SessionInfo {
   id: string;

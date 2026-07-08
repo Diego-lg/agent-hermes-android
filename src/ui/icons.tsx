@@ -146,6 +146,14 @@ export const CheckIcon = make(<Polyline points="20 6 9 17 4 12" />);
 
 export const ChevronLeftIcon = make(<Polyline points="15 18 9 12 15 6" />);
 export const ChevronRightIcon = make(<Polyline points="9 18 15 12 9 6" />);
+export const PlayIcon = make(<Polygon points="6 3 20 12 6 21 6 3" />);
+export const SaveIcon = make(
+  <>
+    <Path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+    <Polyline points="17 21 17 13 7 13 7 21" />
+    <Polyline points="7 3 7 8 15 8" />
+  </>,
+);
 export const ArrowUpRightIcon = make(
   <>
     <Line x1="7" y1="17" x2="17" y2="7" />

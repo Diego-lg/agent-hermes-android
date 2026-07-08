@@ -44,4 +44,9 @@ export const STORAGE_KEYS = {
   enabledAgents: 'hermes.enabledAgents',
   recentSessions: 'hermes.recentSessions',
   theme: 'hermes.theme',
+  driveTokens: 'hermes.drive.tokens',
+  driveConfig: 'hermes.drive.config',
+  notes: 'hermes.notes',
+  cronJobs: 'hermes.cron',
+  serverProfiles: 'hermes.servers',
 } as const;

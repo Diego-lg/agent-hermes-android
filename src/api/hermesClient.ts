@@ -366,7 +366,8 @@ export class HermesClient {
     }
   }
 
-  private rpc(method: string, params: any): Promise<any> {
+  /** Execute a single JSON-RPC call. Public so sub-clients (cron, notes AI) can call too. */
+  async rpc(method: string, params: any): Promise<any> {
     if (!this.ws || this.ws.readyState !== 1) {
       return Promise.reject(new HermesError('Not connected', 0));
     }
