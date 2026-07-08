@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Allow cleartext HTTP/WS traffic to the local LAN Hermes Serve instance.
+  For LAN-only dev builds. In a production build, use TLS or a tunnel
+  (Tailscale, SSH) and remove this file.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

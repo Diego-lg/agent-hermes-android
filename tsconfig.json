@@ -1,0 +1,14 @@
+{
+  "extends": "@react-native/typescript-config/tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "jsx": "react-native",
+    "lib": ["es2022", "dom"],
+    "types": ["react-native", "jest", "node"],
+    "moduleResolution": "node"
+  },
+  "include": ["src/**/*", "index.js", "App.tsx", "*.ts", "*.tsx", "__tests__/**/*"]
+}
