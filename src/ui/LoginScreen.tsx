@@ -1,17 +1,18 @@
 /**
- * Login screen — industrial.
- * Big monospace `USER:` and `HOST:` headers, single accent on the connect button.
+ * Login screen. Theme-aware.
  */
 import React, {useState} from 'react';
 import {View, KeyboardAvoidingView, Platform, Text, TouchableOpacity, TextInput} from 'react-native';
 import {useApp} from './AppContext';
-import {palette, spacing, type} from './theme';
+import {useTheme} from './theme.tsx';
 import {ArrowUpRightIcon, EyeIcon, EyeOffIcon} from './icons';
 
 export default function LoginScreen() {
   const {config, setConfig, connect, connecting, connectionError} = useApp();
+  const {palette, spacing, type} = useTheme();
   const [draft, setDraft] = useState(config);
   const [showPwd, setShowPwd] = useState(false);
+  const monoFont = Platform.select({ios: 'Menlo', android: 'monospace'});
 
   const onSubmit = () => {
     setConfig(draft);
@@ -24,7 +25,7 @@ export default function LoginScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={{paddingHorizontal: spacing.xl}}>
         <Text style={type.label}>HERMES AGENT</Text>
-        <View style={{height: 1, width: 32, backgroundColor: palette.on, marginTop: spacing.sm, marginBottom: spacing.lg}} />
+        <View style={{height: 1, width: 32, backgroundColor: palette.accent, marginTop: spacing.sm, marginBottom: spacing.lg}} />
 
         <Text style={type.label}>USER</Text>
         <TextInput
@@ -36,7 +37,7 @@ export default function LoginScreen() {
           style={{
             color: palette.text, fontSize: 22, fontWeight: '600',
             letterSpacing: -0.5, paddingVertical: 8,
-            borderBottomWidth: 1, borderBottomColor: palette.hairline,
+            borderBottomWidth: 1, borderBottomColor: palette.border,
           }}
         />
 
@@ -52,10 +53,9 @@ export default function LoginScreen() {
             placeholderTextColor={palette.textGhost}
             keyboardType="numbers-and-punctuation"
             style={{
-              flex: 1, color: palette.text, fontSize: 18,
-              fontFamily: Platform.select({ios: 'Menlo', android: 'monospace'}),
+              flex: 1, color: palette.text, fontSize: 18, fontFamily: monoFont,
               paddingVertical: 8,
-              borderBottomWidth: 1, borderBottomColor: palette.hairline,
+              borderBottomWidth: 1, borderBottomColor: palette.border,
             }}
           />
           <Text style={[type.mono, {color: palette.textDim, marginLeft: 8}]}>:</Text>
@@ -65,9 +65,9 @@ export default function LoginScreen() {
             keyboardType="number-pad"
             style={{
               width: 70, color: palette.text, fontSize: 18, textAlign: 'right',
-              fontFamily: Platform.select({ios: 'Menlo', android: 'monospace'}),
+              fontFamily: monoFont,
               paddingVertical: 8,
-              borderBottomWidth: 1, borderBottomColor: palette.hairline,
+              borderBottomWidth: 1, borderBottomColor: palette.border,
             }}
           />
         </View>
@@ -75,7 +75,7 @@ export default function LoginScreen() {
         <View style={{height: spacing.xl}} />
 
         <Text style={type.label}>PASSWORD</Text>
-        <View style={{flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: palette.hairline}}>
+        <View style={{flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: palette.border}}>
           <Text style={[type.mono, {color: palette.textMuted, marginRight: 8}]}>›</Text>
           <TextInput
             value={draft.password}
@@ -85,8 +85,7 @@ export default function LoginScreen() {
             placeholder="••••••••"
             placeholderTextColor={palette.textGhost}
             style={{
-              flex: 1, color: palette.text, fontSize: 16,
-              fontFamily: Platform.select({ios: 'Menlo', android: 'monospace'}),
+              flex: 1, color: palette.text, fontSize: 16, fontFamily: monoFont,
               paddingVertical: 8,
             }}
           />
@@ -114,7 +113,7 @@ export default function LoginScreen() {
           disabled={connecting || !draft.password}
           style={{
             flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-            backgroundColor: palette.on,
+            backgroundColor: palette.accent,
             padding: spacing.lg,
             marginTop: spacing.xxl,
             opacity: connecting || !draft.password ? 0.4 : 1,
@@ -133,4 +132,4 @@ export default function LoginScreen() {
       </View>
     </KeyboardAvoidingView>
   );
-}
+};

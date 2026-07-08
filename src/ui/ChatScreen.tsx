@@ -1,20 +1,12 @@
 /**
- * Chat tab — industrial / terminal-style.
- *
- * - No bubble backgrounds, no per-message icons
- * - Assistant: indented with a `▸` prefix in dim text
- * - User: flush right, `›` prompt prefix in muted
- * - Tool events: monospace log lines: `[hh:mm:ss] ⎔ terminal ls -la`
- * - Streaming: blinking `▍` cursor at the end of in-flight text
- * - Composer: no border, just a hairline top + bare `› message…` placeholder
- * - Header: agent name in monospace + small agent tag, no avatar
+ * Chat tab — streaming conversation. Theme-aware.
  */
 import React, {useEffect, useRef, useState} from 'react';
 import {
   View, FlatList, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Text, Animated,
 } from 'react-native';
 import {useApp} from './AppContext';
-import {palette, spacing, type} from './theme';
+import {useTheme} from './theme.tsx';
 import {agentById} from '../agents/catalog';
 import {ChevronLeftIcon, SendIcon, StopIcon, MicIcon, MicOffIcon, ArrowUpRightIcon} from './icons';
 
@@ -33,13 +25,16 @@ export default function ChatScreen() {
     client, currentSession, messages, streaming, streamedText,
     sendPrompt, abortStream, currentAgent, setScreen,
   } = useApp();
+  const {palette, spacing, type} = useTheme();
   const [draft, setDraft] = useState('');
   const [toolEvents, setToolEvents] = useState<ToolEvent[]>([]);
   const [listening, setListening] = useState(false);
   const listRef = useRef<FlatList>(null);
   const cursor = useRef(new Animated.Value(0)).current;
+  const isMono = palette.type === 'mono';
+  const monoFont = Platform.select({ios: 'Menlo', android: 'monospace'});
+  const fontFamily = isMono ? monoFont : undefined;
 
-  // Blinking cursor while streaming
   useEffect(() => {
     if (streaming) {
       Animated.loop(
@@ -88,14 +83,12 @@ export default function ChatScreen() {
     r.start();
   };
 
-  if (!currentSession) {
-    return <EmptyState setScreen={setScreen} />;
-  }
+  if (!currentSession) return <EmptyState setScreen={setScreen} />;
 
   const agent = currentAgent;
   const AgentIcon = agent ? agent.icon : null;
   const agentPrefix = agent ? agent.name.toUpperCase().slice(0, 3) : 'GEN';
-  const accent = agent ? agent.color : palette.on;
+  const accent = agent ? agent.color : palette.accent;
 
   return (
     <KeyboardAvoidingView
@@ -103,11 +96,10 @@ export default function ChatScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={64}>
 
-      {/* Header — monospace, hairline bottom */}
       <View style={{
         flexDirection: 'row', alignItems: 'center',
         paddingHorizontal: spacing.lg, paddingVertical: 12,
-        borderBottomWidth: 1, borderBottomColor: palette.hairline,
+        borderBottomWidth: 1, borderBottomColor: palette.border,
       }}>
         <TouchableOpacity onPress={() => setScreen('home')} style={{padding: 4, marginRight: 8}}>
           <ChevronLeftIcon size={20} color={palette.textMuted} />
@@ -131,7 +123,7 @@ export default function ChatScreen() {
         ) : (
           <View style={{
             width: 28, height: 28,
-            borderWidth: 1, borderColor: palette.hairlineStrong,
+            borderWidth: 1, borderColor: palette.border,
             alignItems: 'center', justifyContent: 'center',
           }}>
             <Text style={[type.mono, {fontSize: 10}]}>{agentPrefix}</Text>
@@ -139,7 +131,6 @@ export default function ChatScreen() {
         )}
       </View>
 
-      {/* Messages — terminal log */}
       <FlatList
         ref={listRef}
         data={displayMessages}
@@ -153,6 +144,7 @@ export default function ChatScreen() {
             streaming={streaming && index === displayMessages.length - 1 && item.role === 'assistant'}
             cursor={cursor}
             agentPrefix={agentPrefix}
+            fontFamily={fontFamily}
           />
         )}
         contentContainerStyle={{padding: spacing.lg, paddingBottom: 12}}
@@ -161,20 +153,18 @@ export default function ChatScreen() {
           toolEvents.length ? (
             <View style={{marginTop: spacing.md}}>
               {toolEvents.map((t, i) => (
-                <ToolLine key={i} name={t.name} ts={t.ts} />
+                <ToolLine key={i} name={t.name} ts={t.ts} fontFamily={fontFamily} />
               ))}
             </View>
           ) : null
         }
       />
 
-      {/* Composer — hairline, no border, terminal-prompt placeholder */}
       <View style={{
         flexDirection: 'row', alignItems: 'flex-end',
         paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
-        borderTopWidth: 1, borderTopColor: palette.hairline,
-        backgroundColor: palette.bg,
-        gap: spacing.md,
+        borderTopWidth: 1, borderTopColor: palette.border,
+        backgroundColor: palette.bg, gap: spacing.md,
       }}>
         <Text style={[type.mono, {color: palette.textMuted, paddingBottom: 12, fontSize: 14}]}>›</Text>
         <TextInput
@@ -187,22 +177,17 @@ export default function ChatScreen() {
           style={{
             flex: 1, color: palette.text,
             paddingVertical: 10, fontSize: 14,
-            fontFamily: Platform.select({ios: 'Menlo', android: 'monospace'}),
-            letterSpacing: 0,
+            fontFamily, letterSpacing: 0,
             maxHeight: 120,
           }}
         />
-        <TouchableOpacity
-          onPress={onMicPress}
-          style={{padding: 6, marginBottom: 4}}>
+        <TouchableOpacity onPress={onMicPress} style={{padding: 6, marginBottom: 4}}>
           {listening
             ? <MicOffIcon size={16} color={palette.error} />
             : <MicIcon size={16} color={palette.textDim} />}
         </TouchableOpacity>
         {streaming ? (
-          <TouchableOpacity
-            onPress={abortStream}
-            style={{padding: 6, marginBottom: 4}}>
+          <TouchableOpacity onPress={abortStream} style={{padding: 6, marginBottom: 4}}>
             <StopIcon size={14} color={palette.error} filled />
           </TouchableOpacity>
         ) : (
@@ -211,7 +196,7 @@ export default function ChatScreen() {
             onPress={onSend}
             style={{padding: 6, marginBottom: 4}}>
             {draft.trim()
-              ? <ArrowUpRightIcon size={18} color={palette.on} />
+              ? <ArrowUpRightIcon size={18} color={palette.accent} />
               : <SendIcon size={16} color={palette.textGhost} />}
           </TouchableOpacity>
         )}
@@ -220,36 +205,40 @@ export default function ChatScreen() {
   );
 }
 
-const EmptyState: React.FC<{setScreen: (s: any) => void}> = ({setScreen}) => (
-  <View style={{flex: 1, backgroundColor: palette.bg, justifyContent: 'center', alignItems: 'center', padding: 32}}>
-    <Text style={type.label}>NO ACTIVE SESSION</Text>
-    <View style={{height: 1, width: 80, backgroundColor: palette.hairline, marginVertical: spacing.lg}} />
-    <Text style={[type.bodyMuted, {textAlign: 'center', maxWidth: 280, fontSize: 12}]}>
-      Start a new conversation or pick an agent.
-    </Text>
-    <View style={{height: 1, width: 80, backgroundColor: palette.hairline, marginVertical: spacing.lg}} />
-    <TouchableOpacity
-      onPress={() => setScreen('home')}
-      style={{flexDirection: 'row', alignItems: 'center', padding: spacing.sm}}>
-      <Text style={[type.h2, {fontSize: 12, color: palette.on}]}>RETURN TO HOME</Text>
-      <Text style={[type.mono, {marginLeft: 8, color: palette.textDim}]}>↩</Text>
-    </TouchableOpacity>
-  </View>
-);
+const EmptyState: React.FC<{setScreen: (s: any) => void}> = ({setScreen}) => {
+  const {palette, spacing, type} = useTheme();
+  return (
+    <View style={{flex: 1, backgroundColor: palette.bg, justifyContent: 'center', alignItems: 'center', padding: 32}}>
+      <Text style={type.label}>NO ACTIVE SESSION</Text>
+      <View style={{height: 1, width: 80, backgroundColor: palette.border, marginVertical: spacing.lg}} />
+      <Text style={[type.body, {color: palette.textMuted, textAlign: 'center', maxWidth: 280, fontSize: 12}]}>
+        Start a new conversation or pick an agent.
+      </Text>
+      <View style={{height: 1, width: 80, backgroundColor: palette.border, marginVertical: spacing.lg}} />
+      <TouchableOpacity
+        onPress={() => setScreen('home')}
+        style={{flexDirection: 'row', alignItems: 'center', padding: spacing.sm}}>
+        <Text style={[type.h2, {fontSize: 12, color: palette.accent}]}>RETURN TO HOME</Text>
+        <Text style={[type.mono, {marginLeft: 8, color: palette.textDim}]}>↩</Text>
+      </TouchableOpacity>
+    </View>
+  );
+};
 
-const ToolLine: React.FC<{name: string; ts: number}> = ({name, ts}) => (
-  <View style={{flexDirection: 'row', alignItems: 'center', paddingVertical: 2}}>
-    <Text style={[type.monoMuted, {color: palette.textDim, fontSize: 10}]}>
-      [{formatTime(ts)}]
-    </Text>
-    <Text style={[type.monoMuted, {marginLeft: 8, color: palette.active, fontSize: 10}]}>
-      ⎔
-    </Text>
-    <Text style={[type.monoMuted, {marginLeft: 8, color: palette.textMuted, fontSize: 10, flex: 1}]}>
-      {name}
-    </Text>
-  </View>
-);
+const ToolLine: React.FC<{name: string; ts: number; fontFamily?: any}> = ({name, ts, fontFamily}) => {
+  const {type, palette} = useTheme();
+  return (
+    <View style={{flexDirection: 'row', alignItems: 'center', paddingVertical: 2}}>
+      <Text style={[type.monoMuted, {color: palette.textDim, fontSize: 10, fontFamily}]}>
+        [{formatTime(ts)}]
+      </Text>
+      <Text style={[type.monoMuted, {marginLeft: 8, color: palette.success, fontSize: 10, fontFamily}]}>⎔</Text>
+      <Text style={[type.monoMuted, {marginLeft: 8, color: palette.textMuted, fontSize: 10, fontFamily, flex: 1}]}>
+        {name}
+      </Text>
+    </View>
+  );
+};
 
 const Message: React.FC<{
   role: 'user' | 'assistant';
@@ -259,44 +248,42 @@ const Message: React.FC<{
   streaming: boolean;
   cursor: Animated.Value;
   agentPrefix: string;
-}> = ({role, text, usage, isLast, streaming, cursor, agentPrefix}) => {
+  fontFamily?: any;
+}> = ({role, text, usage, isLast, streaming, cursor, agentPrefix, fontFamily}) => {
+  const {palette, spacing, type} = useTheme();
   const isUser = role === 'user';
   const ts = formatTime(Date.now());
-
   const cursorOpacity = streaming
     ? cursor.interpolate({inputRange: [0, 1], outputRange: [0, 1]})
     : 0;
 
   return (
     <View style={{marginBottom: spacing.lg}}>
-      {/* Meta line */}
       <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: 4}}>
-        <Text style={[type.monoMuted, {color: isUser ? palette.textMuted : palette.active, fontSize: 10}]}>
+        <Text style={[type.monoMuted, {color: isUser ? palette.textMuted : palette.success, fontSize: 10, fontFamily}]}>
           {isUser ? '› YOU' : `▸ ${agentPrefix}`}
         </Text>
-        <Text style={[type.monoMuted, {marginLeft: 8, color: palette.textGhost, fontSize: 10}]}>
+        <Text style={[type.monoMuted, {marginLeft: 8, color: palette.textGhost, fontSize: 10, fontFamily}]}>
           {ts}
         </Text>
         {usage ? (
-          <Text style={[type.monoMuted, {marginLeft: 8, color: palette.textGhost, fontSize: 10}]}>
+          <Text style={[type.monoMuted, {marginLeft: 8, color: palette.textGhost, fontSize: 10, fontFamily}]}>
             ·  {usage.output} OUT  ·  {usage.context_percent}% CTX
           </Text>
         ) : null}
       </View>
-      {/* Text */}
       <View style={{paddingLeft: isUser ? 0 : 12}}>
         <Text
           selectable
           style={{
             color: palette.text,
             fontSize: 14, lineHeight: 22,
-            fontFamily: Platform.select({ios: 'Menlo', android: 'monospace'}),
-            letterSpacing: 0,
+            fontFamily, letterSpacing: 0,
             textAlign: isUser ? 'right' : 'left',
           }}>
           {text || (isUser ? '' : ' ')}
           {streaming ? (
-            <Animated.Text style={{color: palette.on, opacity: cursorOpacity}}>▍</Animated.Text>
+            <Animated.Text style={{color: palette.accent, opacity: cursorOpacity}}>▍</Animated.Text>
           ) : null}
         </Text>
       </View>

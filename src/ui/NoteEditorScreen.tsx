@@ -1,21 +1,16 @@
 /**
- * Note editor — full-screen markdown editor for a single note.
- *
- * Plain TextInput with monospace font, hairline-bordered, no card chrome.
- * Autosaves to Drive every 1.2s after the last keystroke.
- * Has an AI assist panel (collapsible) that pipes the note through Hermes
- * to summarize / extract actions / polish / translate.
+ * Note editor — full-screen markdown editor. Theme-aware.
  */
 import React, {useEffect, useRef, useState} from 'react';
 import {View, ScrollView, TextInput, TouchableOpacity, Text, ActivityIndicator, KeyboardAvoidingView, Platform} from 'react-native';
 import {useApp} from './AppContext';
-import {palette, spacing, type} from './theme';
-import {ChevronLeftIcon, SaveIcon, RefreshIcon, BotIcon} from './icons';
+import {useTheme} from './theme.tsx';
+import {ChevronLeftIcon, RefreshIcon, BotIcon} from './icons';
 import {notesStore, NoteContent} from '../api/notesStore';
-import {HermesClient} from '../api/hermesClient';
 
 export default function NoteEditorScreen() {
   const {setScreen, client} = useApp();
+  const {palette, spacing, type} = useTheme();
   const [note, setNote] = useState<NoteContent | null>(null);
   const [draft, setDraft] = useState('');
   const [name, setName] = useState('');
@@ -26,39 +21,25 @@ export default function NoteEditorScreen() {
   const [aiResult, setAiResult] = useState<string | null>(null);
   const [aiWorking, setAiWorking] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const monoFont = Platform.select({ios: 'Menlo', android: 'monospace'});
 
-  // On mount: pick the most recently modified note from a query param or load the first.
-  // For the MVP, we open a fresh note (id-less) if no note is in flight; otherwise
-  // the list screen passes a pending id via AppContext. For simplicity here we
-  // load the first note.
   useEffect(() => {
     (async () => {
       try {
-        if (!notesStore.isAuthorized()) {
-          setScreen('settings');
-          return;
-        }
+        if (!notesStore.isAuthorized()) { setScreen('settings'); return; }
         const list = await notesStore.list();
         if (list.length === 0) {
-          // create one
           const n = await notesStore.write('Untitled', '# Untitled\n\n');
-          setNote(n);
-          setName(n.name);
-          setDraft(n.content);
+          setNote(n); setName(n.name); setDraft(n.content);
         } else {
           const first = list[0];
           const n = await notesStore.read(first.id);
-          setNote(n);
-          setName(n.name);
-          setDraft(n.content);
+          setNote(n); setName(n.name); setDraft(n.content);
         }
-      } catch (e) {
-        console.warn('editor init', e);
-      }
+      } catch (e) { console.warn('editor init', e); }
     })();
   }, [setScreen]);
 
-  // Debounced autosave
   useEffect(() => {
     if (!note) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -74,11 +55,8 @@ export default function NoteEditorScreen() {
       const updated = await notesStore.write(name || 'Untitled', draft, note.id);
       setNote(updated);
       setLastSaved(Date.now());
-    } catch (e) {
-      console.warn('save failed', e);
-    } finally {
-      setSaving(false);
-    }
+    } catch (e) { console.warn('save failed', e); }
+    finally { setSaving(false); }
   };
 
   const onAiAssist = async () => {
@@ -89,8 +67,6 @@ export default function NoteEditorScreen() {
     setAiWorking(true);
     setAiResult(null);
     try {
-      // Spawn a sub-session with a note-aware system prompt, send the note as context,
-      // collect the streaming reply.
       const sid = await client.createSession('Note Assistant');
       let result = '';
       const off = client.onEvent((type, params) => {
@@ -108,20 +84,17 @@ export default function NoteEditorScreen() {
       await client.closeSession(sid);
     } catch (e: any) {
       setAiResult(`Error: ${e?.message ?? String(e)}`);
-    } finally {
-      setAiWorking(false);
-    }
+    } finally { setAiWorking(false); }
   };
 
   return (
     <KeyboardAvoidingView
       style={{flex: 1, backgroundColor: palette.bg}}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      {/* Header */}
       <View style={{
         flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
         paddingHorizontal: spacing.lg, paddingVertical: 10,
-        borderBottomWidth: 1, borderBottomColor: palette.hairline,
+        borderBottomWidth: 1, borderBottomColor: palette.border,
       }}>
         <TouchableOpacity onPress={() => setScreen('notes')} style={{padding: 4, flexDirection: 'row', alignItems: 'center'}}>
           <ChevronLeftIcon size={20} color={palette.textMuted} />
@@ -141,12 +114,11 @@ export default function NoteEditorScreen() {
             <RefreshIcon size={16} color={palette.textMuted} />
           </TouchableOpacity>
           <TouchableOpacity onPress={() => setAiOpen(o => !o)} style={{padding: 4}}>
-            <BotIcon size={16} color={aiOpen ? palette.on : palette.textMuted} />
+            <BotIcon size={16} color={aiOpen ? palette.accent : palette.textMuted} />
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* Title */}
       <View style={{paddingHorizontal: spacing.lg, paddingTop: spacing.md}}>
         <TextInput
           value={name}
@@ -160,12 +132,11 @@ export default function NoteEditorScreen() {
         />
       </View>
 
-      <View style={{height: 1, backgroundColor: palette.hairline, marginTop: spacing.sm}} />
+      <View style={{height: 1, backgroundColor: palette.border, marginTop: spacing.sm}} />
 
-      {/* AI panel (collapsible) */}
       {aiOpen ? (
         <View style={{
-          padding: spacing.md, borderBottomWidth: 1, borderBottomColor: palette.hairline,
+          padding: spacing.md, borderBottomWidth: 1, borderBottomColor: palette.border,
           backgroundColor: palette.surface,
         }}>
           <Text style={[type.label, {marginBottom: 6}]}>AI ASSIST</Text>
@@ -175,9 +146,8 @@ export default function NoteEditorScreen() {
             placeholder="Ask the agent something about this note…"
             placeholderTextColor={palette.textGhost}
             style={{
-              color: palette.text, fontSize: 13,
-              fontFamily: Platform.select({ios: 'Menlo', android: 'monospace'}) as any,
-              backgroundColor: palette.bg, borderWidth: 1, borderColor: palette.hairline,
+              color: palette.text, fontSize: 13, fontFamily: monoFont,
+              backgroundColor: palette.bg, borderWidth: 1, borderColor: palette.border,
               paddingHorizontal: 10, paddingVertical: 8,
             }}
             autoCapitalize="sentences"
@@ -187,7 +157,7 @@ export default function NoteEditorScreen() {
             onPress={onAiAssist}
             disabled={aiWorking}
             style={{
-              backgroundColor: aiWorking ? palette.surfaceHigh : palette.on,
+              backgroundColor: aiWorking ? palette.surfaceAlt : palette.accent,
               paddingVertical: 10, alignItems: 'center',
               marginTop: 8, flexDirection: 'row', justifyContent: 'center', gap: 8,
             }}>
@@ -199,12 +169,11 @@ export default function NoteEditorScreen() {
           {aiResult ? (
             <View style={{
               marginTop: 8, padding: 10,
-              backgroundColor: palette.bg, borderWidth: 1, borderColor: palette.hairline,
+              backgroundColor: palette.bg, borderWidth: 1, borderColor: palette.border,
             }}>
-              <Text style={[type.label, {marginBottom: 4, color: palette.active}]}>RESPONSE</Text>
+              <Text style={[type.label, {marginBottom: 4, color: palette.success}]}>RESPONSE</Text>
               <Text style={{
-                color: palette.text, fontSize: 13, lineHeight: 19,
-                fontFamily: Platform.select({ios: 'Menlo', android: 'monospace'}) as any,
+                color: palette.text, fontSize: 13, lineHeight: 19, fontFamily: monoFont,
               }}>
                 {aiResult}
               </Text>
@@ -213,7 +182,6 @@ export default function NoteEditorScreen() {
         </View>
       ) : null}
 
-      {/* Body */}
       <ScrollView style={{flex: 1}} keyboardShouldPersistTaps="handled">
         <TextInput
           value={draft}
@@ -223,8 +191,7 @@ export default function NoteEditorScreen() {
           multiline
           textAlignVertical="top"
           style={{
-            color: palette.text, fontSize: 15, lineHeight: 22,
-            fontFamily: Platform.select({ios: 'Menlo', android: 'monospace'}) as any,
+            color: palette.text, fontSize: 15, lineHeight: 22, fontFamily: monoFont,
             padding: spacing.lg, paddingBottom: 80, minHeight: 400,
             letterSpacing: 0,
           }}

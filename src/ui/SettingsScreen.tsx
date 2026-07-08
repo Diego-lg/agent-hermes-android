@@ -1,19 +1,22 @@
 /**
- * Settings tab — industrial / config-file aesthetic.
- * Now also has a CLOUD section for Google Drive setup (required for Notes).
+ * Settings tab. Theme-aware. Now includes an Appearance section for picking
+ * one of the 6 design systems (Industrial, Brutalist, Soft Glass, Editorial,
+ * Neon, Warm Clay).
  */
 import React, {useEffect, useState} from 'react';
 import {View, ScrollView, TouchableOpacity, Text, TextInput, Switch, Alert, Animated} from 'react-native';
 import {useApp} from './AppContext';
 import {Field} from './atoms';
-import {palette, spacing, type} from './theme';
+import {useTheme, THEME_LIST, Theme, ThemeId} from './theme.tsx';
+import {useThemeController} from './ThemeController';
 import {AGENT_CATALOG} from '../agents/catalog';
-import {ChevronRightIcon, EyeIcon, EyeOffIcon} from './icons';
+import {ChevronRightIcon, EyeIcon, EyeOffIcon, CheckIcon} from './icons';
 import {notesStore} from '../api/notesStore';
 import {DriveConfig} from '../api/googleDrive';
 
 export default function SettingsScreen() {
   const {config, setConfig, client, connect, disconnect, logout, setScreen} = useApp();
+  const {palette, spacing, type, radii} = useTheme();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(config);
   const [showPwd, setShowPwd] = useState(false);
@@ -22,8 +25,9 @@ export default function SettingsScreen() {
   const [slideX] = useState(new Animated.Value(0));
   const [drive, setDrive] = useState<DriveConfig | null>(null);
   const [driveEmail, setDriveEmail] = useState<string | null>(null);
-  const [driveBusy, setDriveBusy] = useState(false);
   const [draftClientId, setDraftClientId] = useState('');
+
+  const {themeId, setTheme} = useThemeController();
 
   useEffect(() => {
     (async () => {
@@ -53,20 +57,15 @@ export default function SettingsScreen() {
   };
 
   const onConnectDrive = async () => {
-    if (!drive) {
-      Alert.alert('Setup needed', 'Add your Google OAuth Client ID first.');
-      return;
-    }
-    setDriveBusy(true);
+    if (!drive) { Alert.alert('Setup needed', 'Add your Google OAuth Client ID first.'); return; }
+    setDriveEmail('connecting…');
     try {
       await notesStore.authorize();
-      setDriveEmail(null);
       const me = await notesStore.me();
       setDriveEmail(me.email);
     } catch (e: any) {
+      setDriveEmail(null);
       Alert.alert('Drive sign-in failed', e?.message ?? String(e));
-    } finally {
-      setDriveBusy(false);
     }
   };
 
@@ -85,17 +84,14 @@ export default function SettingsScreen() {
   };
 
   const onDisconnectDrive = async () => {
-    try {
-      await notesStore.signOut();
-      setDriveEmail(null);
-    } catch {}
+    try { await notesStore.signOut(); setDriveEmail(null); } catch {}
   };
 
   const Section: React.FC<{index: string; title: string; children: React.ReactNode}> = ({index, title, children}) => (
     <View style={{marginBottom: spacing.xl}}>
       <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: spacing.sm}}>
         <Text style={[type.monoMuted, {color: palette.textDim, fontSize: 10}]}>{index}</Text>
-        <View style={{width: 1, height: 12, backgroundColor: palette.hairline, marginHorizontal: spacing.sm}} />
+        <View style={{width: 1, height: 12, backgroundColor: palette.border, marginHorizontal: spacing.sm}} />
         <Text style={type.label}>{title}</Text>
       </View>
       <View>{children}</View>
@@ -112,7 +108,7 @@ export default function SettingsScreen() {
       style={{
         flexDirection: 'row', alignItems: 'center',
         paddingVertical: 14,
-        borderTopWidth: last ? 0 : 1, borderTopColor: palette.hairline,
+        borderTopWidth: last ? 0 : 1, borderTopColor: palette.border,
       }}>
       <Text style={[type.mono, {width: 32, color: palette.textDim, fontSize: 11}]}>{index}</Text>
       <Text style={[type.body, {flex: 1, color: destructive ? palette.error : palette.text}]}>{label}</Text>
@@ -131,12 +127,24 @@ export default function SettingsScreen() {
       contentContainerStyle={{paddingBottom: 40}}>
       <View style={{paddingHorizontal: spacing.lg, paddingTop: spacing.xl}}>
         <Text style={type.label}>SETTINGS</Text>
-        <Text style={[type.displaySmall, {marginTop: spacing.sm, fontSize: 22, lineHeight: 26}]}>
-          Configuration
-        </Text>
-        <View style={{height: 1, backgroundColor: palette.hairline, marginTop: spacing.xl}} />
+        <Text style={[type.displaySmall, {marginTop: spacing.sm}]}>Configuration</Text>
+        <View style={{height: 1, backgroundColor: palette.border, marginTop: spacing.xl}} />
 
-        <Section index="01" title="CONNECTION">
+        {/* ----- 01 APPEARANCE — theme picker ----- */}
+        <Section index="01" title="APPEARANCE">
+          <View style={{flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginTop: spacing.xs}}>
+            {THEME_LIST.map(t => (
+              <ThemeCard
+                key={t.id}
+                theme={t}
+                active={t.id === themeId}
+                onPress={() => setTheme(t.id as ThemeId)}
+              />
+            ))}
+          </View>
+        </Section>
+
+        <Section index="02" title="CONNECTION">
           <Row index="00" label="Server" value={`${config.host}:${config.port}`}
             onPress={() => { setDraft(config); setEditing(true); }} />
           <Row index="01" label="User" value={config.username}
@@ -146,7 +154,7 @@ export default function SettingsScreen() {
         {editing ? (
           <View style={{
             backgroundColor: palette.surface,
-            borderWidth: 1, borderColor: palette.hairline,
+            borderWidth: 1, borderColor: palette.border,
             padding: spacing.lg, marginBottom: spacing.xl,
           }}>
             <Text style={[type.label, {marginBottom: spacing.md}]}>EDIT CONNECTION</Text>
@@ -160,35 +168,25 @@ export default function SettingsScreen() {
               </TouchableOpacity>
             </View>
             <View style={{flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md}}>
-              <TouchableOpacity onPress={onSave} style={{flex: 1, paddingVertical: 12, alignItems: 'center', backgroundColor: palette.on}}>
+              <TouchableOpacity onPress={onSave} style={{flex: 1, paddingVertical: 12, alignItems: 'center', backgroundColor: palette.accent}}>
                 <Text style={[type.h2, {color: palette.bg, fontSize: 12, letterSpacing: 0.5}]}>SAVE & CONNECT</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => { setEditing(false); setDraft(config); }} style={{flex: 1, paddingVertical: 12, alignItems: 'center', borderWidth: 1, borderColor: palette.hairline}}>
+              <TouchableOpacity onPress={() => { setEditing(false); setDraft(config); }} style={{flex: 1, paddingVertical: 12, alignItems: 'center', borderWidth: 1, borderColor: palette.border}}>
                 <Text style={[type.h2, {color: palette.text, fontSize: 12, letterSpacing: 0.5}]}>CANCEL</Text>
               </TouchableOpacity>
             </View>
           </View>
         ) : null}
 
-        <Section index="02" title="CLOUD — GOOGLE DRIVE">
-          <Row
-            index="00"
-            label="Status"
-            value={driveEmail ?? (drive ? 'NOT SIGNED IN' : 'NOT CONFIGURED')}
-          />
-          <Row
-            index="01"
-            label={drive ? 'OAuth Client ID' : 'Set Client ID'}
+        <Section index="03" title="CLOUD — GOOGLE DRIVE">
+          <Row index="00" label="Status" value={driveEmail ?? (drive ? 'NOT SIGNED IN' : 'NOT CONFIGURED')} />
+          <Row index="01" label={drive ? 'OAuth Client ID' : 'Set Client ID'}
             value={drive ? `${drive.clientId.slice(0, 14)}…` : 'tap to add'}
-            onPress={() => Alert.prompt?.('Google OAuth Client ID', 'Paste the Client ID from console.cloud.google.com') ?? Alert.alert(
+            onPress={() => Alert.alert(
               'OAuth Client ID',
-              'Open console.cloud.google.com, create an Android OAuth Client, paste its Client ID here.',
-              [
-                {text: 'Cancel', style: 'cancel'},
-                {text: 'Set', onPress: () => {}},
-              ],
-            )}
-          />
+              'Open console.cloud.google.com, create an Android OAuth Client, paste its Client ID below.',
+              [{text: 'OK'}],
+            )} />
           {drive && !driveEmail ? (
             <Row index="02" label="Sign in to Drive" value="TAP" onPress={onConnectDrive} last />
           ) : null}
@@ -196,36 +194,78 @@ export default function SettingsScreen() {
             <Row index="03" label="Disconnect Drive" destructive onPress={onDisconnectDrive} last />
           ) : null}
           {!drive ? (
-            <View style={{paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: palette.hairline}}>
+            <View style={{paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: palette.border}}>
               <Field label="GOOGLE OAUTH CLIENT ID" value={draftClientId} onChangeText={setDraftClientId} autoCapitalize="none" />
               <TouchableOpacity
                 onPress={onSaveClientId}
-                style={{paddingVertical: 10, alignItems: 'center', backgroundColor: palette.on, marginTop: 8}}>
+                style={{paddingVertical: 10, alignItems: 'center', backgroundColor: palette.accent, marginTop: 8}}>
                 <Text style={[type.h2, {color: palette.bg, fontSize: 12, letterSpacing: 0.5}]}>SAVE CLIENT ID</Text>
               </TouchableOpacity>
             </View>
           ) : null}
         </Section>
 
-        <Section index="03" title="PREFERENCES">
+        <Section index="04" title="PREFERENCES">
           <Row index="00" label="Notifications" value={notifications ? 'ON' : 'OFF'}
-            right={<Switch value={notifications} onValueChange={setNotifications} trackColor={{true: palette.on, false: palette.surfaceAlt}} thumbColor={palette.bg} />} />
+            right={<Switch value={notifications} onValueChange={setNotifications} trackColor={{true: palette.accent, false: palette.surfaceAlt}} thumbColor={palette.bg} />} />
           <Row index="01" label="Default Agent" value="NONE" onPress={() => setScreen('agents')} last />
         </Section>
 
-        <Section index="04" title="ACCOUNT">
+        <Section index="05" title="ACCOUNT">
           <SignOutRow signingOut={signingOut} slideX={slideX} onPress={onSignOut} />
         </Section>
 
         <Text style={[type.monoMuted, {marginTop: spacing.lg, textAlign: 'center', color: palette.textGhost}]}>
-          HERMES AGENT v0.5.0  ·  CLIENT
+          HERMES AGENT v0.6.0  ·  CLIENT
         </Text>
       </View>
     </ScrollView>
   );
 }
 
+/** Theme picker card. Shows the theme's three swatches + name + a check
+ *  when it's the active one. Tapping applies the theme immediately. */
+const ThemeCard: React.FC<{
+  theme: Theme;
+  active: boolean;
+  onPress: () => void;
+}> = ({theme, active, onPress}) => {
+  const {palette, spacing, type, radii} = useTheme();
+  const [bg, accent, fg] = theme.meta.swatches;
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.7}
+      style={{
+        width: '47%',
+        backgroundColor: theme.palette.surface,
+        borderRadius: radii.lg,
+        borderWidth: 2, borderColor: active ? theme.palette.accent : palette.border,
+        overflow: 'hidden',
+      }}>
+      {/* Mini-preview: three swatches stacked like a tiny landscape */}
+      <View style={{height: 56, flexDirection: 'row'}}>
+        <View style={{flex: 1, backgroundColor: bg}} />
+        <View style={{flex: 1, backgroundColor: fg, alignItems: 'center', justifyContent: 'center'}}>
+          <View style={{width: 20, height: 4, backgroundColor: accent, borderRadius: 2}} />
+        </View>
+        <View style={{flex: 1, backgroundColor: accent}} />
+      </View>
+      <View style={{padding: spacing.md, backgroundColor: theme.palette.surface}}>
+        <View style={{flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between'}}>
+          <Text style={[type.h2, {fontSize: 13, color: theme.palette.text}]}>{theme.meta.name}</Text>
+          {active ? <CheckIcon size={14} color={theme.palette.accent} /> : null}
+        </View>
+        <Text style={[type.body, {color: theme.palette.textMuted, marginTop: 2, fontSize: 11}]} numberOfLines={1}>
+          {theme.meta.tagline}
+        </Text>
+      </View>
+    </TouchableOpacity>
+  );
+};
+
 const SignOutRow: React.FC<{signingOut: boolean; slideX: Animated.Value; onPress: () => void}> = ({signingOut, slideX, onPress}) => {
+  const {palette, type, spacing} = useTheme();
   const knob = 36;
   return (
     <View>
@@ -234,7 +274,7 @@ const SignOutRow: React.FC<{signingOut: boolean; slideX: Animated.Value; onPress
         <Text style={[type.body, {flex: 1, color: palette.error}]}>SIGN OUT</Text>
       </View>
       <View style={{
-        height: 40, borderWidth: 1, borderColor: palette.hairline,
+        height: 40, borderWidth: 1, borderColor: palette.border,
         backgroundColor: palette.surface, justifyContent: 'center',
         marginTop: 4, marginBottom: 8, paddingHorizontal: 2,
       }}>

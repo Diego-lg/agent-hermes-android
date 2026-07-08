@@ -1,19 +1,16 @@
 /**
- * Agents tab — industrial list.
- *
- * No icons on the rows. Each entry: a 2-letter tabular prefix, the agent
- * name in caps, a one-line description, and a chevron only on the focused row.
- * Section headers use a numeric prefix: "01 — BUILT-IN", "02 — COMING".
+ * Agents tab — modern list. Theme-aware.
  */
 import React from 'react';
 import {View, ScrollView, TouchableOpacity, Text} from 'react-native';
 import {useApp} from './AppContext';
+import {useTheme} from './theme.tsx';
 import {AGENT_CATALOG, AgentDef} from '../agents/catalog';
-import {palette, spacing, type} from './theme';
 import {ChevronRightIcon} from './icons';
 
 export default function AgentsScreen() {
   const {setScreen, openOrCreateSession} = useApp();
+  const {palette, spacing, type} = useTheme();
 
   const onLaunch = async (a: AgentDef) => {
     await openOrCreateSession(a.id);
@@ -25,26 +22,22 @@ export default function AgentsScreen() {
       style={{flex: 1, backgroundColor: palette.bg}}
       contentContainerStyle={{paddingBottom: 40}}>
       <View style={{paddingHorizontal: spacing.lg, paddingTop: spacing.xl}}>
-        {/* Header */}
         <Text style={type.label}>AGENTS</Text>
-        <Text style={[type.displaySmall, {marginTop: spacing.sm, fontSize: 22, lineHeight: 26}]}>
-          Sub-agents
-        </Text>
-        <Text style={[type.bodyMuted, {marginTop: 6, fontSize: 12, maxWidth: 280}]}>
+        <Text style={[type.displaySmall, {marginTop: spacing.sm}]}>Sub-agents</Text>
+        <Text style={[type.body, {color: palette.textMuted, marginTop: 6, fontSize: 12, maxWidth: 280}]}>
           Pre-configured specialists. Each opens a chat pre-loaded with a system prompt for that role.
         </Text>
 
-        {/* Hairline */}
-        <View style={{height: 1, backgroundColor: palette.hairline, marginTop: spacing.xl}} />
+        <View style={{height: 1, backgroundColor: palette.border, marginTop: spacing.xl}} />
 
-        {/* Section 01 — built-in */}
         <View style={{flexDirection: 'row', alignItems: 'center', marginTop: spacing.lg, marginBottom: spacing.sm}}>
           <Text style={[type.monoMuted, {color: palette.textDim, fontSize: 10}]}>01</Text>
-          <View style={{width: 1, height: 12, backgroundColor: palette.hairline, marginHorizontal: spacing.sm}} />
+          <View style={{width: 1, height: 12, backgroundColor: palette.border, marginHorizontal: spacing.sm}} />
           <Text style={type.label}>BUILT-IN</Text>
         </View>
 
         {AGENT_CATALOG.map((a, idx) => {
+          const IconCmp = a.icon;
           const prefix = a.name.toUpperCase().slice(0, 2);
           return (
             <TouchableOpacity
@@ -54,16 +47,12 @@ export default function AgentsScreen() {
               style={{
                 flexDirection: 'row', alignItems: 'center',
                 paddingVertical: spacing.md,
-                borderTopWidth: idx === 0 ? 0 : 1, borderTopColor: palette.hairline,
+                borderTopWidth: idx === 0 ? 0 : 1, borderTopColor: palette.border,
               }}>
-              <Text style={[type.mono, {width: 28, color: palette.textMuted}]}>
-                {prefix}
-              </Text>
+              <Text style={[type.mono, {width: 28, color: palette.textDim}]}>{prefix}</Text>
               <View style={{flex: 1}}>
-                <Text style={[type.h2, {fontSize: 13, letterSpacing: 0.2}]}>
-                  {a.name.toUpperCase()}
-                </Text>
-                <Text style={[type.bodyMuted, {marginTop: 3, fontSize: 11}]} numberOfLines={1}>
+                <Text style={[type.h2, {fontSize: 13, letterSpacing: 0.2}]}>{a.name.toUpperCase()}</Text>
+                <Text style={[type.body, {color: palette.textMuted, marginTop: 3, fontSize: 11}]} numberOfLines={1}>
                   {a.description}
                 </Text>
               </View>
@@ -72,12 +61,11 @@ export default function AgentsScreen() {
           );
         })}
 
-        <View style={{height: 1, backgroundColor: palette.hairline}} />
+        <View style={{height: 1, backgroundColor: palette.border}} />
 
-        {/* Section 02 — coming */}
         <View style={{flexDirection: 'row', alignItems: 'center', marginTop: spacing.xl, marginBottom: spacing.sm}}>
           <Text style={[type.monoMuted, {color: palette.textDim, fontSize: 10}]}>02</Text>
-          <View style={{width: 1, height: 12, backgroundColor: palette.hairline, marginHorizontal: spacing.sm}} />
+          <View style={{width: 1, height: 12, backgroundColor: palette.border, marginHorizontal: spacing.sm}} />
           <Text style={type.label}>COMING</Text>
         </View>
 
@@ -88,14 +76,12 @@ export default function AgentsScreen() {
               style={{
                 flexDirection: 'row', alignItems: 'center',
                 paddingVertical: spacing.sm,
-                borderTopWidth: i === 0 ? 0 : 1, borderTopColor: palette.hairline,
+                borderTopWidth: i === 0 ? 0 : 1, borderTopColor: palette.border,
               }}>
               <Text style={[type.mono, {width: 28, color: palette.textGhost, fontSize: 10}]}>
                 {String(i + 7).padStart(2, '0')}
               </Text>
-              <Text style={[type.body, {color: palette.textMuted, fontSize: 12, letterSpacing: 0.3}]}>
-                {label}
-              </Text>
+              <Text style={[type.body, {color: palette.textMuted, fontSize: 12, letterSpacing: 0.3}]}>{label}</Text>
             </View>
           ))}
         </View>

@@ -1,11 +1,11 @@
 /**
- * App shell. Wraps everything in AppProvider, then renders the active screen
- * + a bottom nav with industrial icon-only layout.
+ * App shell. Theme-aware. Wraps everything in ThemeController → AppProvider,
+ * then renders the active screen + bottom nav.
  */
 import React, {useEffect, useState} from 'react';
 import {View, StatusBar} from 'react-native';
 import {AppProvider, useApp} from './src/ui/AppContext';
-import {palette} from './src/ui/theme';
+import {ThemeController, useThemeController} from './src/ui/ThemeController';
 import {BottomNav, Tab} from './src/ui/BottomNav';
 import HomeScreen from './src/ui/HomeScreen';
 import ChatScreen from './src/ui/ChatScreen';
@@ -20,6 +20,7 @@ import {notesStore} from './src/api/notesStore';
 
 function Shell() {
   const {screen, setScreen, currentSession} = useApp();
+  const {theme} = useThemeController();
   const [notesReady, setNotesReady] = useState(false);
 
   useEffect(() => {
@@ -36,12 +37,14 @@ function Shell() {
     return <LoginScreen />;
   }
 
-  // Map 'profile' to bottom-nav-hidden so it lives in Settings instead
   const tab: Tab = screen === 'profile' ? 'settings' : (screen as Tab);
 
   return (
-    <View style={{flex: 1, backgroundColor: palette.bg}}>
-      <StatusBar barStyle="light-content" backgroundColor={palette.bg} />
+    <View style={{flex: 1, backgroundColor: theme.palette.bg}}>
+      <StatusBar
+        barStyle={theme.palette.bg.startsWith('#0') || theme.palette.bg === '#000' ? 'light-content' : 'dark-content'}
+        backgroundColor={theme.palette.bg}
+      />
       <View style={{flex: 1}}>
         {screen === 'home' && <HomeScreen />}
         {screen === 'chat' && <ChatScreen />}
@@ -64,8 +67,10 @@ function Shell() {
 
 export default function App() {
   return (
-    <AppProvider>
-      <Shell />
-    </AppProvider>
+    <ThemeController>
+      <AppProvider>
+        <Shell />
+      </AppProvider>
+    </ThemeController>
   );
 }

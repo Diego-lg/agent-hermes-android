@@ -1,23 +1,17 @@
 /**
- * Home tab — industrial dashboard.
- *
- * - Pure black, no card backgrounds
- * - Hairline separators between sections (1px #1f1f1f)
- * - Tabular figures for all numerics
- * - Etched labels (9pt uppercase, wide tracking) like aluminum engravings
- * - Single accent: the "new chat" affordance
- * - Greeting is a huge display line, no card behind it
- * - Token usage as a thin horizontal gauge strip
+ * Home tab — dashboard.
+ * Theme-aware.
  */
 import React, {useEffect, useState} from 'react';
 import {View, ScrollView, TouchableOpacity, RefreshControl, Text} from 'react-native';
 import {useApp} from './AppContext';
-import {palette, spacing, type} from './theme';
-import {PlusIcon, ChevronRightIcon, RefreshIcon} from './icons';
-import {AGENT_CATALOG, agentById} from '../agents/catalog';
+import {useTheme} from './theme.tsx';
+import {PlusIcon, RefreshIcon, ChevronRightIcon} from './icons';
+import {AGENT_CATALOG} from '../agents/catalog';
 
 export default function HomeScreen() {
   const {client, config, sessions, refreshSessions, setScreen, openOrCreateSession, currentSession, setCurrentSession, setMessages} = useApp();
+  const {palette, spacing, type, radii} = useTheme();
   const [refreshing, setRefreshing] = useState(false);
   const [usage, setUsage] = useState<{input: number; output: number; context_percent: number} | null>(null);
   const [activeSubs, setActiveSubs] = useState<number>(0);
@@ -37,7 +31,7 @@ export default function HomeScreen() {
 
   useEffect(() => { void onRefresh(); }, [client]);
 
-  const recent = sessions.slice(0, 5);
+  const recent = sessions.slice(0, 4);
   const greeting = (() => {
     const h = new Date().getHours();
     if (h < 5) return 'Working late';
@@ -45,26 +39,23 @@ export default function HomeScreen() {
     if (h < 18) return 'Good afternoon';
     return 'Good evening';
   })();
-
-  // Token usage as a thin gauge (0-100% from server)
   const usagePercent = Math.min(100, Math.max(0, usage?.context_percent ?? 0));
+  const isSoft = palette.bg !== '#000000' && palette.bg !== '#0a0c0f';
 
   return (
     <ScrollView
       style={{flex: 1, backgroundColor: palette.bg}}
       contentContainerStyle={{paddingBottom: 40}}
       refreshControl={
-        <RefreshControl
-          refreshing={refreshing} onRefresh={onRefresh}
-          tintColor={palette.textMuted} colors={[palette.text]}
-        />
+        <RefreshControl refreshing={refreshing} onRefresh={onRefresh}
+          tintColor={palette.textMuted} colors={[palette.text]} />
       }>
       <View style={{paddingHorizontal: spacing.lg, paddingTop: spacing.xl}}>
-        {/* Top status row: monospace, etched */}
+        {/* Status row */}
         <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md}}>
           <View style={{
             width: 6, height: 6, borderRadius: 3,
-            backgroundColor: client ? palette.active : palette.error,
+            backgroundColor: client ? palette.success : palette.error,
             marginRight: 8,
           }} />
           <Text style={type.label}>
@@ -72,19 +63,23 @@ export default function HomeScreen() {
           </Text>
         </View>
 
-        {/* Greeting — huge, single line, no card */}
+        {/* Greeting */}
         <Text style={[type.display, {marginTop: spacing.sm}]}>
           {greeting}
           <Text style={{color: palette.textDim}}>,</Text>
         </Text>
-        <Text style={[type.bodyMuted, {marginTop: 4}]}>
+        <Text style={[type.body, {color: palette.textMuted, marginTop: 4}]}>
           What can Hermes do for you today?
         </Text>
 
         {/* Hairline rule */}
-        <View style={{height: 1, backgroundColor: palette.hairline, marginTop: spacing.xl}} />
+        <View style={{
+          height: 1,
+          backgroundColor: palette.border,
+          marginTop: spacing.xl,
+        }} />
 
-        {/* Stats — 3 columns, no labels, just big numbers + tiny caption */}
+        {/* Stats row */}
         <View style={{flexDirection: 'row', marginTop: spacing.lg}}>
           <StatCol value={String(usage?.output ?? 0)} label="OUTPUT" />
           <StatCol value={String(activeSubs)} label="AGENTS" />
@@ -95,7 +90,7 @@ export default function HomeScreen() {
         <View style={{marginTop: spacing.lg}}>
           <View style={{flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6}}>
             <Text style={type.label}>CONTEXT USAGE</Text>
-            <Text style={type.monoMuted}>{String(usagePercent).padStart(3, ' ')}%</Text>
+            <Text style={type.mono}>{String(usagePercent).padStart(3, ' ')}%</Text>
           </View>
           <View style={{
             height: 2, backgroundColor: palette.surfaceAlt,
@@ -103,15 +98,15 @@ export default function HomeScreen() {
           }}>
             <View style={{
               height: 2, width: `${usagePercent}%`,
-              backgroundColor: usagePercent > 80 ? palette.error : palette.active,
+              backgroundColor: usagePercent > 80 ? palette.error : palette.success,
             }} />
           </View>
         </View>
 
         {/* Hairline rule */}
-        <View style={{height: 1, backgroundColor: palette.hairline, marginTop: spacing.xl}} />
+        <View style={{height: 1, backgroundColor: palette.border, marginTop: spacing.xl}} />
 
-        {/* New chat affordance — the only accent element on the screen */}
+        {/* New chat affordance */}
         <TouchableOpacity
           onPress={() => { void openOrCreateSession().then(() => setScreen('chat')); }}
           activeOpacity={0.7}
@@ -120,25 +115,25 @@ export default function HomeScreen() {
             paddingVertical: spacing.lg,
           }}>
           <View style={{
-            width: 36, height: 36,
-            backgroundColor: palette.surfaceAlt,
-            borderWidth: 1, borderColor: palette.hairlineStrong,
+            width: 36, height: 36, borderRadius: 18,
+            backgroundColor: palette.accentMuted,
+            borderWidth: 1, borderColor: palette.accent,
             alignItems: 'center', justifyContent: 'center', marginRight: spacing.md,
           }}>
-            <PlusIcon size={18} color={palette.on} />
+            <PlusIcon size={18} color={palette.accent} />
           </View>
           <View style={{flex: 1}}>
-            <Text style={[type.h1, {color: palette.on, fontSize: 15}]}>NEW CHAT</Text>
-            <Text style={[type.bodyMuted, {marginTop: 2, fontSize: 12}]}>
+            <Text style={[type.h1, {color: palette.accent, fontSize: 15}]}>NEW CHAT</Text>
+            <Text style={[type.body, {color: palette.textMuted, marginTop: 2, fontSize: 12}]}>
               Start a fresh conversation
             </Text>
           </View>
-          <Text style={[type.monoMuted, {color: palette.textDim, fontSize: 11}]}>00 ↩</Text>
+          <Text style={[type.mono, {color: palette.textDim, fontSize: 11}]}>00 ↩</Text>
         </TouchableOpacity>
 
-        <View style={{height: 1, backgroundColor: palette.hairline}} />
+        <View style={{height: 1, backgroundColor: palette.border}} />
 
-        {/* Quick agents row — 3 columns, no card backgrounds */}
+        {/* Quick agents row */}
         <View style={{flexDirection: 'row', marginTop: spacing.lg}}>
           {AGENT_CATALOG.slice(0, 3).map((a, i) => {
             const IconCmp = a.icon;
@@ -149,11 +144,11 @@ export default function HomeScreen() {
                 onPress={() => { void openOrCreateSession(a.id).then(() => setScreen('chat')); }}
                 style={{
                   flex: 1, paddingVertical: spacing.md, paddingRight: spacing.md,
-                  borderRightWidth: i < 2 ? 1 : 0, borderRightColor: palette.hairline,
+                  borderRightWidth: i < 2 ? 1 : 0, borderRightColor: palette.border,
                 }}>
-                <IconCmp size={20} color={palette.on} />
+                <IconCmp size={20} color={a.color} />
                 <Text style={[type.h2, {marginTop: 8, fontSize: 13}]}>{a.name.toUpperCase()}</Text>
-                <Text style={[type.bodyMuted, {marginTop: 2, fontSize: 11}]} numberOfLines={1}>
+                <Text style={[type.body, {color: palette.textMuted, marginTop: 2, fontSize: 11}]} numberOfLines={1}>
                   {a.description}
                 </Text>
               </TouchableOpacity>
@@ -161,7 +156,7 @@ export default function HomeScreen() {
           })}
         </View>
 
-        <View style={{height: 1, backgroundColor: palette.hairline, marginTop: spacing.lg}} />
+        <View style={{height: 1, backgroundColor: palette.border, marginTop: spacing.lg}} />
 
         {/* Recent sessions header */}
         <View style={{
@@ -175,7 +170,7 @@ export default function HomeScreen() {
         </View>
 
         {recent.length === 0 ? (
-          <Text style={[type.bodyMuted, {paddingVertical: spacing.lg, fontSize: 12}]}>
+          <Text style={[type.body, {color: palette.textMuted, paddingVertical: spacing.lg, fontSize: 12}]}>
             No sessions yet — start one above.
           </Text>
         ) : (
@@ -196,9 +191,9 @@ export default function HomeScreen() {
               style={{
                 flexDirection: 'row', alignItems: 'center',
                 paddingVertical: spacing.md,
-                borderTopWidth: idx === 0 ? 0 : 1, borderTopColor: palette.hairline,
+                borderTopWidth: idx === 0 ? 0 : 1, borderTopColor: palette.border,
               }}>
-              <Text style={[type.monoMuted, {width: 28, color: palette.textDim}]}>
+              <Text style={[type.mono, {width: 28, color: palette.textDim}]}>
                 {String(idx).padStart(2, '0')}
               </Text>
               <View style={{flex: 1}}>
@@ -214,18 +209,21 @@ export default function HomeScreen() {
           ))
         )}
 
-        <View style={{height: 1, backgroundColor: palette.hairline}} />
+        <View style={{height: 1, backgroundColor: palette.border}} />
         <Text style={[type.monoMuted, {marginTop: spacing.lg, textAlign: 'center', color: palette.textGhost}]}>
-          HERMES v0.4.0  ·  CLIENT
+          HERMES v0.6.0  ·  CLIENT
         </Text>
       </View>
     </ScrollView>
   );
 }
 
-const StatCol: React.FC<{value: string; label: string}> = ({value, label}) => (
-  <View style={{flex: 1}}>
-    <Text style={type.num}>{value.padStart(3, '0')}</Text>
-    <Text style={[type.label, {marginTop: 4}]}>{label}</Text>
-  </View>
-);
+const StatCol: React.FC<{value: string; label: string}> = ({value, label}) => {
+  const {type, palette} = useTheme();
+  return (
+    <View style={{flex: 1}}>
+      <Text style={type.num}>{value.padStart(3, '0')}</Text>
+      <Text style={[type.label, {color: palette.textMuted, marginTop: 4}]}>{label}</Text>
+    </View>
+  );
+};

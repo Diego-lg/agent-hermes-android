@@ -1,24 +1,22 @@
 /**
- * Cron jobs tab — schedule + manage prompts the desktop agent runs on a cron.
- *
- * The list is sourced from the desktop via `cron.manage` JSON-RPC. The phone
- * can pause, resume, run-now, edit, and delete jobs. Creating a new job
- * posts the prompt + schedule to the desktop.
+ * Cron jobs tab. Theme-aware.
  */
 import React, {useEffect, useState, useCallback} from 'react';
 import {View, ScrollView, TouchableOpacity, RefreshControl, Text, TextInput, Modal, Alert} from 'react-native';
 import {useApp} from './AppContext';
-import {palette, spacing, type} from './theme';
-import {ChevronRightIcon, RefreshIcon, PlusIcon, ClockIcon, PlayIcon, TrashIcon, XIcon, CheckIcon} from './icons';
+import {useTheme} from './theme.tsx';
+import {ChevronRightIcon, RefreshIcon, PlusIcon, PlayIcon, TrashIcon, XIcon} from './icons';
 import {CronClient, CronJob} from '../api/cronClient';
 
 export default function CronScreen() {
   const {client} = useApp();
+  const {palette, spacing, type} = useTheme();
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<{job?: CronJob} | null>(null);
   const [draft, setDraft] = useState({name: '', schedule: '0 8 * * *', prompt: ''});
+  const monoFont = Platform.select({ios: 'Menlo', android: 'monospace'});
 
   const refresh = useCallback(async () => {
     if (!client) return;
@@ -43,9 +41,7 @@ export default function CronScreen() {
       const c = new CronClient(client);
       await c.toggle(j.id, !j.enabled);
       setJobs(prev => prev.map(x => x.id === j.id ? {...x, enabled: !x.enabled} : x));
-    } catch (e: any) {
-      Alert.alert('Toggle failed', e?.message ?? String(e));
-    }
+    } catch (e: any) { Alert.alert('Toggle failed', e?.message ?? String(e)); }
   };
 
   const onRunNow = async (j: CronJob) => {
@@ -54,9 +50,7 @@ export default function CronScreen() {
       const c = new CronClient(client);
       await c.runNow(j.id);
       Alert.alert('Triggered', `"${j.name}" is running now on the desktop.`);
-    } catch (e: any) {
-      Alert.alert('Run failed', e?.message ?? String(e));
-    }
+    } catch (e: any) { Alert.alert('Run failed', e?.message ?? String(e)); }
   };
 
   const onDelete = (j: CronJob) => {
@@ -68,22 +62,13 @@ export default function CronScreen() {
           const c = new CronClient(client);
           await c.delete(j.id);
           setJobs(prev => prev.filter(x => x.id !== j.id));
-        } catch (e: any) {
-          Alert.alert('Delete failed', e?.message ?? String(e));
-        }
+        } catch (e: any) { Alert.alert('Delete failed', e?.message ?? String(e)); }
       }},
     ]);
   };
 
-  const onCreate = () => {
-    setDraft({name: '', schedule: '0 8 * * *', prompt: ''});
-    setEditing({});
-  };
-
-  const onEdit = (j: CronJob) => {
-    setDraft({name: j.name, schedule: j.schedule, prompt: j.prompt});
-    setEditing({job: j});
-  };
+  const onCreate = () => { setDraft({name: '', schedule: '0 8 * * *', prompt: ''}); setEditing({}); };
+  const onEdit = (j: CronJob) => { setDraft({name: j.name, schedule: j.schedule, prompt: j.prompt}); setEditing({job: j}); };
 
   const onSave = async () => {
     if (!client) return;
@@ -100,9 +85,7 @@ export default function CronScreen() {
       }
       setEditing(null);
       await refresh();
-    } catch (e: any) {
-      Alert.alert('Save failed', e?.message ?? String(e));
-    }
+    } catch (e: any) { Alert.alert('Save failed', e?.message ?? String(e)); }
   };
 
   return (
@@ -118,7 +101,7 @@ export default function CronScreen() {
           <View style={{flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between'}}>
             <View>
               <Text style={type.label}>CRON</Text>
-              <Text style={[type.displaySmall, {marginTop: spacing.sm, fontSize: 22, lineHeight: 26}]}>
+              <Text style={[type.displaySmall, {marginTop: spacing.sm}]}>
                 {jobs.length} {jobs.length === 1 ? 'job' : 'jobs'}
               </Text>
             </View>
@@ -127,12 +110,12 @@ export default function CronScreen() {
                 <RefreshIcon size={16} color={palette.textMuted} />
               </TouchableOpacity>
               <TouchableOpacity onPress={onCreate} hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
-                <PlusIcon size={20} color={palette.on} />
+                <PlusIcon size={20} color={palette.accent} />
               </TouchableOpacity>
             </View>
           </View>
 
-          <View style={{height: 1, backgroundColor: palette.hairline, marginTop: spacing.lg}} />
+          <View style={{height: 1, backgroundColor: palette.border, marginTop: spacing.lg}} />
 
           {error ? (
             <View style={{padding: spacing.md, borderWidth: 1, borderColor: palette.error, marginTop: spacing.md}}>
@@ -140,7 +123,7 @@ export default function CronScreen() {
               <Text style={[type.monoMuted, {marginTop: 4, color: palette.textMuted}]}>{error}</Text>
             </View>
           ) : jobs.length === 0 ? (
-            <Text style={[type.bodyMuted, {paddingVertical: spacing.xl, fontSize: 12, textAlign: 'center'}]}>
+            <Text style={[type.body, {color: palette.textMuted, paddingVertical: spacing.xl, fontSize: 12, textAlign: 'center'}]}>
               No cron jobs. Tap + to schedule a prompt.
             </Text>
           ) : (
@@ -150,25 +133,23 @@ export default function CronScreen() {
                 style={{
                   flexDirection: 'row', alignItems: 'center',
                   paddingVertical: spacing.md,
-                  borderTopWidth: idx === 0 ? 0 : 1, borderTopColor: palette.hairline,
+                  borderTopWidth: idx === 0 ? 0 : 1, borderTopColor: palette.border,
                   opacity: j.enabled ? 1 : 0.5,
                 }}>
                 <Text style={[type.mono, {width: 32, color: palette.textDim, fontSize: 10}]}>
                   {String(idx + 1).padStart(2, '0')}
                 </Text>
                 <View style={{flex: 1}}>
-                  <Text style={[type.body, {fontWeight: '600'}]} numberOfLines={1}>
-                    {j.name}
-                  </Text>
+                  <Text style={[type.body, {fontWeight: '600'}]} numberOfLines={1}>{j.name}</Text>
                   <Text style={[type.monoMuted, {marginTop: 4, fontSize: 10}]}>
                     {j.schedule}  ·  {j.nextRun ? `next: ${formatRelative(j.nextRun)}` : 'paused'}
                   </Text>
                 </View>
                 <TouchableOpacity onPress={() => onRunNow(j)} style={{padding: 8}}>
-                  <PlayIcon size={14} color={palette.active} />
+                  <PlayIcon size={14} color={palette.success} />
                 </TouchableOpacity>
                 <TouchableOpacity onPress={() => onToggle(j)} style={{padding: 8}}>
-                  <Text style={[type.mono, {fontSize: 10, color: j.enabled ? palette.active : palette.textDim}]}>
+                  <Text style={[type.mono, {fontSize: 10, color: j.enabled ? palette.success : palette.textDim}]}>
                     {j.enabled ? 'ON' : 'OFF'}
                   </Text>
                 </TouchableOpacity>
@@ -188,9 +169,8 @@ export default function CronScreen() {
         <View style={{flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end'}}>
           <View style={{
             backgroundColor: palette.bg,
-            borderTopWidth: 1, borderColor: palette.hairlineStrong,
-            padding: spacing.lg,
-            paddingBottom: spacing.xxl,
+            borderTopWidth: 1, borderColor: palette.borderStrong,
+            padding: spacing.lg, paddingBottom: spacing.xxl,
           }}>
             <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.lg}}>
               <Text style={[type.h1, {fontSize: 15}]}>
@@ -207,7 +187,7 @@ export default function CronScreen() {
               onChangeText={v => setDraft({...draft, name: v})}
               placeholder="Morning standup"
               placeholderTextColor={palette.textGhost}
-              style={inputStyle}
+              style={useInputStyle()}
               autoCapitalize="none"
             />
 
@@ -217,7 +197,7 @@ export default function CronScreen() {
               onChangeText={v => setDraft({...draft, schedule: v})}
               placeholder="0 8 * * *"
               placeholderTextColor={palette.textGhost}
-              style={inputStyle}
+              style={useInputStyle()}
               autoCapitalize="none"
             />
             <Text style={[type.monoMuted, {marginTop: 4, fontSize: 10, color: palette.textDim}]}>
@@ -230,7 +210,7 @@ export default function CronScreen() {
               onChangeText={v => setDraft({...draft, prompt: v})}
               placeholder="Summarise my unread emails and draft replies"
               placeholderTextColor={palette.textGhost}
-              style={[inputStyle, {minHeight: 80, textAlignVertical: 'top'}]}
+              style={[useInputStyle(), {minHeight: 80, textAlignVertical: 'top'}]}
               multiline
               autoCapitalize="sentences"
             />
@@ -238,18 +218,12 @@ export default function CronScreen() {
             <View style={{flexDirection: 'row', gap: spacing.sm, marginTop: spacing.lg}}>
               <TouchableOpacity
                 onPress={() => setEditing(null)}
-                style={{
-                  flex: 1, paddingVertical: 12, alignItems: 'center',
-                  borderWidth: 1, borderColor: palette.hairline,
-                }}>
+                style={{flex: 1, paddingVertical: 12, alignItems: 'center', borderWidth: 1, borderColor: palette.border}}>
                 <Text style={[type.h2, {color: palette.text, fontSize: 12, letterSpacing: 0.5}]}>CANCEL</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={onSave}
-                style={{
-                  flex: 1, paddingVertical: 12, alignItems: 'center',
-                  backgroundColor: palette.on,
-                }}>
+                style={{flex: 1, paddingVertical: 12, alignItems: 'center', backgroundColor: palette.accent}}>
                 <Text style={[type.h2, {color: palette.bg, fontSize: 12, letterSpacing: 0.5}]}>
                   {editing?.job ? 'SAVE' : 'CREATE'}
                 </Text>
@@ -262,17 +236,22 @@ export default function CronScreen() {
   );
 }
 
-const Label: React.FC<{children: React.ReactNode}> = ({children}) => (
-  <Text style={[type.label, {marginTop: spacing.md, marginBottom: 4}]}>{children}</Text>
-);
+const Label: React.FC<{children: React.ReactNode}> = ({children}) => {
+  const {type, palette, spacing} = useTheme();
+  return <Text style={[type.label, {color: palette.textMuted, marginTop: spacing.md, marginBottom: 4}]}>{children}</Text>;
+};
 
-const inputStyle = {
-  color: palette.text, fontSize: 14,
-  fontFamily: Platform.select({ios: 'Menlo', android: 'monospace'}) as any,
-  backgroundColor: palette.surface,
-  borderWidth: 1, borderColor: palette.hairline,
-  paddingHorizontal: 10, paddingVertical: 8,
-} as const;
+const useInputStyle = () => {
+  const {type, palette, spacing, radii} = useTheme();
+  return {
+    color: palette.text, fontSize: 14,
+    fontFamily: type.mono.fontFamily,
+    backgroundColor: palette.surface,
+    borderWidth: 1, borderColor: palette.border,
+    paddingHorizontal: 10, paddingVertical: 8,
+    borderRadius: radii.md,
+  } as any;
+};
 
 function formatRelative(ts: number): string {
   const diff = ts - Date.now();
