@@ -147,6 +147,20 @@ export class HermesClient {
     return r.sessions ?? [];
   }
 
+  /** Fetch the list of models the desktop server has configured. Best-effort
+   *  — the server may not implement `model.list` (older versions). Returns
+   *  an empty array in that case so the UI can show "no models" cleanly. */
+  async listModels(): Promise<any[]> {
+    if (!this.isConnected()) return [];
+    try {
+      const r = await this.rpc('model.list', {});
+      // Tolerate several response shapes.
+      return r?.models ?? r?.data ?? (Array.isArray(r) ? r : []);
+    } catch {
+      return [];
+    }
+  }
+
   /** Load full message history for a session. */
   async loadHistory(sessionId: string): Promise<any[]> {
     if (!this.isConnected()) throw new HermesError('Not connected', 0);

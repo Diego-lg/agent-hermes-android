@@ -5,11 +5,11 @@ import React, {useEffect, useState, useCallback} from 'react';
 import {View, ScrollView, TouchableOpacity, RefreshControl, Text, TextInput, Modal, Alert, Platform} from 'react-native';
 import {useApp} from './AppContext';
 import {useTheme} from './theme.tsx';
-import {ChevronRightIcon, RefreshIcon, PlusIcon, PlayIcon, TrashIcon, XIcon} from './icons';
+import {ChevronRightIcon, RefreshIcon, PlusIcon, PlayIcon, TrashIcon, XIcon, InfoIcon, ServerIcon} from './icons';
 import {CronClient, CronJob} from '../api/cronClient';
 
 export default function CronScreen() {
-  const {client} = useApp();
+  const {engineClient, serverOnline, engineLabel, switchEngine, setScreen} = useApp();
   const {palette, spacing, type} = useTheme();
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -19,11 +19,11 @@ export default function CronScreen() {
   const monoFont = Platform.select({ios: 'Menlo', android: 'monospace'});
 
   const refresh = useCallback(async () => {
-    if (!client) return;
+    if (!engineClient) return;
     setRefreshing(true);
     setError(null);
     try {
-      const c = new CronClient(client);
+      const c = new CronClient(engineClient);
       const list = await c.list();
       setJobs(list);
     } catch (e: any) {
@@ -31,23 +31,23 @@ export default function CronScreen() {
     } finally {
       setRefreshing(false);
     }
-  }, [client]);
+  }, [engineClient]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
   const onToggle = async (j: CronJob) => {
-    if (!client) return;
+    if (!engineClient) return;
     try {
-      const c = new CronClient(client);
+      const c = new CronClient(engineClient);
       await c.toggle(j.id, !j.enabled);
       setJobs(prev => prev.map(x => x.id === j.id ? {...x, enabled: !x.enabled} : x));
     } catch (e: any) { Alert.alert('Toggle failed', e?.message ?? String(e)); }
   };
 
   const onRunNow = async (j: CronJob) => {
-    if (!client) return;
+    if (!engineClient) return;
     try {
-      const c = new CronClient(client);
+      const c = new CronClient(engineClient);
       await c.runNow(j.id);
       Alert.alert('Triggered', `"${j.name}" is running now on the desktop.`);
     } catch (e: any) { Alert.alert('Run failed', e?.message ?? String(e)); }
@@ -57,9 +57,9 @@ export default function CronScreen() {
     Alert.alert('Delete cron?', `"${j.name}" will stop running.`, [
       {text: 'Cancel', style: 'cancel'},
       {text: 'Delete', style: 'destructive', onPress: async () => {
-        if (!client) return;
+        if (!engineClient) return;
         try {
-          const c = new CronClient(client);
+          const c = new CronClient(engineClient);
           await c.delete(j.id);
           setJobs(prev => prev.filter(x => x.id !== j.id));
         } catch (e: any) { Alert.alert('Delete failed', e?.message ?? String(e)); }
@@ -71,13 +71,13 @@ export default function CronScreen() {
   const onEdit = (j: CronJob) => { setDraft({name: j.name, schedule: j.schedule, prompt: j.prompt}); setEditing({job: j}); };
 
   const onSave = async () => {
-    if (!client) return;
+    if (!engineClient) return;
     if (!draft.name.trim() || !draft.prompt.trim()) {
       Alert.alert('Missing fields', 'Name and prompt are required.');
       return;
     }
     try {
-      const c = new CronClient(client);
+      const c = new CronClient(engineClient);
       if (editing?.job) {
         await c.update(editing.job.id, {...draft, enabled: editing.job.enabled});
       } else {
@@ -116,6 +116,42 @@ export default function CronScreen() {
           </View>
 
           <View style={{height: 1, backgroundColor: palette.border, marginTop: spacing.lg}} />
+
+          {/* Mobile-mode banner. Cron jobs run on the desktop server, so
+              when we're on the cloud engine the list is empty and writes
+              would no-op. Tell the user and offer a one-tap switch. */}
+          {!engineClient ? (
+            <View style={{
+              padding: spacing.md,
+              borderWidth: 1, borderColor: palette.border,
+              borderLeftWidth: 2, borderLeftColor: palette.textDim,
+              marginTop: spacing.md,
+              backgroundColor: palette.surface,
+            }}>
+              <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: 6}}>
+                <ServerIcon size={12} color={palette.textMuted} />
+                <Text style={[type.label, {color: palette.textMuted, marginLeft: 6}]}>
+                  DESKTOP REQUIRED
+                </Text>
+              </View>
+              <Text style={[type.monoMuted, {color: palette.textMuted, fontSize: 11, lineHeight: 16}]}>
+                Cron jobs run on the desktop Hermes server. You're on{' '}
+                <Text style={{color: palette.text}}>{engineLabel}</Text> right now — switch to the desktop to see, create, or run jobs.
+              </Text>
+              <View style={{flexDirection: 'row', gap: spacing.sm, marginTop: 10}}>
+                <TouchableOpacity
+                  onPress={() => { void switchEngine('desktop'); }}
+                  style={{flex: 1, paddingVertical: 10, alignItems: 'center', backgroundColor: palette.accent}}>
+                  <Text style={[type.h2, {color: palette.bg, fontSize: 11, letterSpacing: 0.5}]}>SWITCH TO DESKTOP</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => setScreen('settings')}
+                  style={{flex: 1, paddingVertical: 10, alignItems: 'center', borderWidth: 1, borderColor: palette.border}}>
+                  <Text style={[type.h2, {color: palette.text, fontSize: 11, letterSpacing: 0.5}]}>SETTINGS</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : null}
 
           {error ? (
             <View style={{padding: spacing.md, borderWidth: 1, borderColor: palette.error, marginTop: spacing.md}}>

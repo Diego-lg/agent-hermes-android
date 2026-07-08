@@ -1,7 +1,7 @@
 /**
  * Login screen. Theme-aware.
  */
-import React, {useState} from 'react';
+import React, {useEffect, useState} from 'react';
 import {View, KeyboardAvoidingView, Platform, Text, TouchableOpacity, TextInput} from 'react-native';
 import {useApp} from './AppContext';
 import {useTheme} from './theme.tsx';
@@ -10,7 +10,12 @@ import {ArrowUpRightIcon, EyeIcon, EyeOffIcon} from './icons';
 export default function LoginScreen() {
   const {config, setConfig, connect, connecting, connectionError} = useApp();
   const {palette, spacing, type} = useTheme();
+  // Seed draft from the live config whenever it changes. Without this,
+  // the saved API key / host / port / username load async on app start
+  // (see AppProvider's load effect) and the form would keep showing the
+  // hardcoded default until the user manually re-types it.
   const [draft, setDraft] = useState(config);
+  useEffect(() => { setDraft(config); }, [config]);
   const [showPwd, setShowPwd] = useState(false);
   const monoFont = Platform.select({ios: 'Menlo', android: 'monospace'});
 

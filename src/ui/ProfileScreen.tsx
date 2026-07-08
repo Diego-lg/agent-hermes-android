@@ -7,7 +7,7 @@ import {useApp} from './AppContext';
 import {useTheme} from './theme.tsx';
 
 export default function ProfileScreen() {
-  const {config, client, currentSession} = useApp();
+  const {config, serverOnline, engineLabel, currentSession} = useApp();
   const {palette, spacing, type} = useTheme();
   const sessionShort = currentSession ? currentSession.slice(0, 8) + '…' : 'NONE';
 
@@ -31,14 +31,15 @@ export default function ProfileScreen() {
           <Text style={type.label}>CONNECTION</Text>
           <Row label="HOST" value={`${config.host}:${config.port}`} />
           <Row label="USER" value={config.username} />
-          <Row label="STATUS" value={client ? 'ONLINE' : 'OFFLINE'} accent={client ? palette.success : palette.error} last />
+          <Row label="STATUS" value={serverOnline ? 'ONLINE' : 'OFFLINE'} accent={serverOnline ? palette.success : palette.error} last />
         </View>
 
         <View style={{height: 1, backgroundColor: palette.border, marginTop: spacing.lg}} />
 
         <View style={{marginTop: spacing.lg}}>
           <Text style={type.label}>SESSION</Text>
-          <Row label="ACTIVE" value={sessionShort} last />
+          <Row label="ACTIVE" value={sessionShort} />
+          <Row label="ENGINE" value={engineLabel} last />
         </View>
 
         <View style={{height: 1, backgroundColor: palette.border, marginTop: spacing.lg}} />

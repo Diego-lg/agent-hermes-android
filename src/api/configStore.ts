@@ -12,6 +12,17 @@ export interface AppConfig {
   port: number;
   username: string;
   password: string;
+  /** Direct OpenAI-compatible model API key (used when server is offline). */
+  modelApiKey?: string;
+  /** Base URL of the model API. Defaults to https://api.minimax.io/v1. */
+  modelBaseUrl?: string;
+  /** Model identifier sent to the model API. */
+  modelId?: string;
+  /** User-selected engine: auto (probe), desktop (server-pinned), minimax (cloud-pinned). */
+  engineMode?: 'auto' | 'desktop' | 'minimax';
+  /** Optional GroupId sent as `GroupId:` header. Required by some MiniMax
+   *  model series (e.g. abab/M-series) for /models + /chat/completions. */
+  modelGroupId?: string;
 }
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -19,6 +30,9 @@ const DEFAULT_CONFIG: AppConfig = {
   port: 9119,
   username: 'diego',
   password: 'Maggiemon',
+  modelBaseUrl: 'https://api.minimax.io/v1',
+  modelId: 'MiniMax-Text-01',
+  engineMode: 'auto',
 };
 
 export interface ConfigStore {

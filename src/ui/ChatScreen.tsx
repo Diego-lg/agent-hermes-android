@@ -22,7 +22,7 @@ function formatTime(ts: number): string {
 
 export default function ChatScreen() {
   const {
-    client, currentSession, messages, streaming, streamedText,
+    engine, currentSession, messages, streaming, streamedText,
     sendPrompt, abortStream, currentAgent, setScreen,
   } = useApp();
   const {palette, spacing, type} = useTheme();
@@ -57,8 +57,8 @@ export default function ChatScreen() {
   }, [streaming, cursor]);
 
   useEffect(() => {
-    if (!client) return;
-    const off = client.onEvent((type, params) => {
+    if (!engine) return;
+    const off = engine.onEvent((type: string, params: any) => {
       if (params?.session_id && currentSession && params.session_id !== currentSession) return;
       if (type === 'tool.start') {
         const name = params.payload?.name ?? 'tool';
@@ -66,7 +66,7 @@ export default function ChatScreen() {
       }
     });
     return off;
-  }, [client, currentSession]);
+  }, [engine, currentSession]);
 
   const displayMessages = streamedText
     ? [...messages, {role: 'assistant' as const, text: streamedText, ts: Date.now()}]

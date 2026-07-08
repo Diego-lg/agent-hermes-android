@@ -316,6 +316,15 @@ export const ClockIcon = make(
   </>,
 );
 
+export const ServerIcon = make(
+  <>
+    <Rect x="2" y="3" width="20" height="8" rx="2" />
+    <Rect x="2" y="13" width="20" height="8" rx="2" />
+    <Line x1="6" y1="7" x2="6.01" y2="7" />
+    <Line x1="6" y1="17" x2="6.01" y2="17" />
+  </>,
+);
+
 export const WifiIcon = make(
   <>
     <Path d="M5 12.55a11 11 0 0 1 14 0" />

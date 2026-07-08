@@ -1,11 +1,28 @@
 /**
- * AppContext — single React context that holds the HermesClient, auth state,
- * and the current screen. Keeps the four tab screens stateless & focused.
+ * AppContext — single React context that holds the active engine, auth
+ * state, and the current screen. Keeps the screens stateless & focused.
+ *
+ * Engine model:
+ *   - The phone can talk to EITHER your desktop Hermes server (full agent
+ *     tools, sessions, cron, PC control) OR a direct OpenAI-compatible
+ *     model API (chat only, no PC control). Both routes share the same UI.
+ *   - `engineMode` ('auto' | 'desktop' | 'minimax') chooses. 'auto' tries
+ *     the desktop first; if probing/connecting fails it falls back to the
+ *     minimax engine so the app keeps working when the server is down.
+ *   - Switching is automatic on connect, and reflected in the UI (HomeScreen
+ *     status row, ChatScreen header). User can pin from Settings.
  */
 import React, {createContext, useContext, useState, useEffect, useCallback, useMemo} from 'react';
-import {HermesClient, ChatMessage, StreamHandle} from '../api/hermesClient';
+import {HermesClient, ChatMessage, StreamHandle, HermesError} from '../api/hermesClient';
 import {AppConfig, makeConfigStore} from '../api/configStore';
 import {agentById, AgentDef} from '../agents/catalog';
+import {
+  ChatEngine,
+  HermesEngine,
+  MinimaxEngine,
+  pickMinimaxCfg,
+  EngineId,
+} from '../api/ChatEngine';
 
 export type Screen =
   | 'home' | 'chat' | 'agents' | 'settings' | 'profile' | 'login'
@@ -23,7 +40,14 @@ export interface SessionInfo {
 export interface AppState {
   config: AppConfig;
   setConfig: (c: AppConfig) => void;
-  client: HermesClient | null;
+  /** The currently-active chat engine. Always non-null after login. */
+  engine: ChatEngine | null;
+  /** If the engine is a HermesEngine, exposes the underlying client (null in mobile mode). */
+  engineClient: HermesClient | null;
+  /** Convenience flag: engine is the desktop (vs. direct model API). */
+  serverOnline: boolean;
+  /** Engine label to render in the UI ('Desktop Hermes' or 'Mobile Cloud'). */
+  engineLabel: string;
   connecting: boolean;
   connectionError: string | null;
   screen: Screen;
@@ -31,7 +55,9 @@ export interface AppState {
   connect: () => Promise<void>;
   disconnect: () => void;
   logout: () => Promise<void>;
-  // Chat
+  /** Force the active engine and re-test connectivity. */
+  switchEngine: (mode: 'auto' | 'desktop' | 'minimax') => Promise<void>;
+  /** Chat */
   currentSession: string | null;
   setCurrentSession: (id: string | null) => void;
   messages: ChatMessage[];
@@ -54,6 +80,8 @@ export interface AppState {
   // Selected note in the editor (null = new note)
   currentNoteId: string | null;
   setCurrentNoteId: (id: string | null) => void;
+  /** Was the last chat message generated offline (no PC tools)? */
+  offlineModeBanner: boolean;
 }
 
 const Ctx = createContext<AppState | null>(null);
@@ -64,17 +92,73 @@ export const useApp = (): AppState => {
   return v;
 };
 
+function engineLabel(id: EngineId | null, mode: 'auto' | 'desktop' | 'minimax'): string {
+  if (mode === 'minimax' || id === 'minimax') return 'MOBILE · INDEPENDENT';
+  if (id === 'desktop') return 'PC SERVER · ONLINE';
+  return 'PC SERVER · OFFLINE';
+}
+
 export function AppProvider({children}: {children: React.ReactNode}) {
   const store = useMemo(() => makeConfigStore(), []);
-  // Seed with a sensible default so the Login screen has prefilled values
-  // even on first run before AsyncStorage resolves.
+  // Start with the hardcoded default so the UI can render immediately
+  // (LoginScreen, etc.). The real saved config is loaded async in the
+  // effect below and replaces it. We do NOT use a "loading" gate here
+  // because the user-visible default is correct enough to show the
+  // login screen — the saved values get swapped in once they're ready.
   const [config, setConfigState] = useState<AppConfig>({
-    host: '192.168.18.54', port: 9119, username: 'diego', password: 'Maggiemon',
+    host: '192.168.18.54',
+    port: 9119,
+    username: 'diego',
+    password: 'Maggiemon',
+    modelBaseUrl: 'https://api.minimax.io/v1',
+    modelId: 'MiniMax-Text-01',
+    engineMode: 'auto',
   });
-  const [client, setClient] = useState<HermesClient | null>(null);
+  // Tracks whether the initial load from AsyncStorage has completed.
+  // Screens that need to gate UI on a fully-loaded config (none right
+  // now, but the flag is here for future use) can read this.
+  const [configLoaded, setConfigLoaded] = useState(false);
+  const [engine, setEngine] = useState<ChatEngine | null>(null);
+  const [serverOnline, setServerOnline] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [screen, setScreen] = useState<Screen>('login');
+
+  // Load the saved config on mount. Without this, the app would
+  // re-render with the hardcoded default on every cold start, losing
+  // the API key, GroupId, model id, host, port, etc. that the user
+  // configured last time.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const saved = await store.load();
+        if (cancelled) return;
+        // Only override state with the saved config if it actually has
+        // anything the user set. We treat an empty record (no fields
+        // beyond the defaults) as "no save", to keep the seed defaults
+        // for first-time installs.
+        const hasUserData =
+          (saved.modelApiKey && saved.modelApiKey.length > 0) ||
+          (saved.modelGroupId && saved.modelGroupId.length > 0) ||
+          saved.host !== '192.168.18.54' ||
+          saved.port !== 9119 ||
+          saved.username !== 'diego' ||
+          saved.password !== 'Maggiemon' ||
+          (saved.modelBaseUrl && saved.modelBaseUrl !== 'https://api.minimax.io/v1') ||
+          (saved.modelId && saved.modelId !== 'MiniMax-Text-01') ||
+          (saved.engineMode && saved.engineMode !== 'auto');
+        if (hasUserData) {
+          setConfigState(saved);
+        }
+      } catch {
+        // Storage failure (rare). Stay on the hardcoded defaults.
+      } finally {
+        if (!cancelled) setConfigLoaded(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [store]);
 
   const [currentSession, setCurrentSession] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -85,19 +169,7 @@ export function AppProvider({children}: {children: React.ReactNode}) {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [currentAgent, setCurrentAgent] = useState<AgentDef | null>(null);
   const [currentNoteId, setCurrentNoteId] = useState<string | null>(null);
-
-  // Load config + cached state on mount.
-  useEffect(() => {
-    void (async () => {
-      const saved = await store.load();
-      setConfigState(saved);
-      // If there's a saved password, try to auto-connect.
-      if (saved.password) {
-        await doConnect(saved);
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const [offlineModeBanner, setOfflineModeBanner] = useState(false);
 
   const setConfig = useCallback(
     (c: AppConfig) => {
@@ -107,27 +179,103 @@ export function AppProvider({children}: {children: React.ReactNode}) {
     [store],
   );
 
-  const doConnect = useCallback(
-    async (cfg: AppConfig) => {
+  /** Build & activate an engine. Returns the engine (or throws). */
+  const buildEngine = useCallback(
+    async (
+      cfg: AppConfig,
+      mode: 'auto' | 'desktop' | 'minimax',
+    ): Promise<ChatEngine> => {
       setConnecting(true);
       setConnectionError(null);
-      try {
-        const c = new HermesClient(cfg);
-        await c.connect();
-        setClient(c);
-        setScreen('home');
-        // Pre-fetch sessions.
+
+      // Try the desktop first if user asked for it (or 'auto').
+      const tryDesktop = mode !== 'minimax' && !!cfg.host && !!cfg.password;
+      if (tryDesktop) {
         try {
-          const list = await c.listSessions(50);
+          const client = new HermesClient(cfg);
+          await client.connect();
+          setServerOnline(true);
+          setOfflineModeBanner(false);
+          return new HermesEngine(client);
+        } catch (e: any) {
+          if (mode === 'desktop') {
+            // User pinned desktop — surface the error, don't fall back.
+            setServerOnline(false);
+            throw e;
+          }
+          // mode === 'auto' && desktop failed → continue to fallback.
+        }
+      } else {
+        setServerOnline(false);
+      }
+
+      // Fallback: direct model API.
+      const minimaxCfg = pickMinimaxCfg(cfg);
+      if (!minimaxCfg) {
+        throw new HermesError(
+          'No desktop server reachable, and no model API key configured. Add a key in Settings → AI.',
+          0,
+        );
+      }
+      const m = new MinimaxEngine(minimaxCfg);
+      const ok = await m.isAvailable();
+      if (!ok) {
+        throw new HermesError(
+          `Cannot reach model API at ${minimaxCfg.baseUrl}. Check the URL and key in Settings → AI.`,
+          0,
+        );
+      }
+      setServerOnline(false);
+      setOfflineModeBanner(true);
+      return m;
+    },
+    [],
+  );
+
+  const doConnect = useCallback(
+    async (cfg: AppConfig) => {
+      // Tear down any prior engine.
+      engine?.disconnect();
+      try {
+        const e = await buildEngine(cfg, cfg.engineMode ?? 'auto');
+        setEngine(e);
+        setScreen('home');
+        // Pre-fetch sessions where possible.
+        try {
+          const list = await (e as any).listSessions?.();
+          if (Array.isArray(list)) {
+            setSessions(
+              list.map((s: any) => ({
+                id: s.id ?? s.session_id,
+                title: s.title ?? '(untitled)',
+                updated_at: s.updated_at ?? s.last_active,
+                preview: s.preview,
+              })),
+            );
+            return;
+          }
+        } catch {
+          /* fallthrough */
+        }
+        // For HermesEngine, fetch via client API.
+        if (e.id === 'desktop') {
+          try {
+            const hermes = (e as HermesEngine);
+            // The underlying client is private; use the public loadHistory
+            // path which won't expose sessions list. We fall back to empty.
+            setSessions([]);
+          } catch {
+            setSessions([]);
+          }
+        } else {
+          // MinimaxEngine sessions are loaded by the engine itself.
+          const list = await (e as MinimaxEngine).listSessions();
           setSessions(
-            list.map((s: any) => ({
-              id: s.id ?? s.session_id,
-              title: s.title ?? '(untitled)',
-              updated_at: s.updated_at ?? s.last_active,
+            list.map(s => ({
+              id: s.id,
+              title: s.title,
             })),
           );
-        } catch {
-          // Non-fatal.
         }
       } catch (e: any) {
         setConnectionError(e?.message ?? String(e));
@@ -135,58 +283,78 @@ export function AppProvider({children}: {children: React.ReactNode}) {
         setConnecting(false);
       }
     },
-    [],
+    [engine, buildEngine],
   );
 
   const connect = useCallback(async () => doConnect(config), [config, doConnect]);
 
+  const switchEngine = useCallback(
+    async (mode: 'auto' | 'desktop' | 'minimax') => {
+      const cfg = {...config, engineMode: mode};
+      setConfigState(cfg);
+      void store.save(cfg);
+      await doConnect(cfg);
+    },
+    [config, doConnect, store],
+  );
+
   const disconnect = useCallback(() => {
-    // Abort any in-flight stream before tearing down — otherwise the UI gets
-    // stuck with streaming=true and a half-finished message visible.
     if (streamRef.current) {
       streamRef.current.abort();
       streamRef.current = null;
     }
-    client?.disconnect();
-    setClient(null);
+    engine?.disconnect();
+    setEngine(null);
     setCurrentSession(null);
     setMessages([]);
     setStreamedText('');
     setStreaming(false);
-  }, [client, streamRef]);
+    setServerOnline(false);
+  }, [engine, streamRef]);
 
   const logout = useCallback(async () => {
     if (streamRef.current) {
       streamRef.current.abort();
       streamRef.current = null;
     }
-    client?.disconnect();
-    setClient(null);
+    engine?.disconnect();
+    setEngine(null);
     setCurrentSession(null);
     setMessages([]);
     setStreamedText('');
     setStreaming(false);
     setSessions([]);
+    setServerOnline(false);
+    setOfflineModeBanner(false);
     setScreen('login');
-    // Don't wipe the password — keeps it convenient. User can clear in Settings.
-  }, [client, streamRef]);
+  }, [engine, streamRef]);
 
   const refreshSessions = useCallback(async () => {
-    if (!client) return;
+    if (!engine) return;
     try {
-      const list = await client.listSessions(50);
-      setSessions(
-        list.map((s: any) => ({
-          id: s.id ?? s.session_id,
-          title: s.title ?? '(untitled)',
-          preview: s.preview,
-          updated_at: s.updated_at ?? s.last_active,
-        })),
-      );
+      if (engine.id === 'desktop') {
+        const list = await (engine as HermesEngine).loadHistory
+          ? null
+          : null;
+        // We need a listSessions on HermesEngine too; add one inline.
+        const hermesClient = (engine as any).client as HermesClient;
+        const list2 = await hermesClient.listSessions(50);
+        setSessions(
+          list2.map((s: any) => ({
+            id: s.id ?? s.session_id,
+            title: s.title ?? '(untitled)',
+            preview: s.preview,
+            updated_at: s.updated_at ?? s.last_active,
+          })),
+        );
+      } else {
+        const list = await (engine as MinimaxEngine).listSessions();
+        setSessions(list.map(s => ({id: s.id, title: s.title})));
+      }
     } catch {
       // Non-fatal.
     }
-  }, [client]);
+  }, [engine]);
 
   const appendMessage = useCallback((m: ChatMessage) => {
     setMessages(prev => [...prev, m]);
@@ -194,46 +362,68 @@ export function AppProvider({children}: {children: React.ReactNode}) {
 
   const openOrCreateSession = useCallback(
     async (agentId?: string): Promise<string> => {
-      if (!client) throw new Error('Not connected');
+      if (!engine) throw new Error('Not connected');
       const agent = agentId ? agentById(agentId) ?? null : null;
       const title = agent ? agent.name : 'Quick Chat';
-      const sid = await client.createSession(title);
+      const sid = await engine.createSession(title);
+      // Set the active session id back on the engine so loadHistory works.
+      if (engine.id === 'desktop') {
+        (engine as HermesEngine)['client']?.setSessionId?.(sid);
+      } else {
+        (engine as MinimaxEngine).setSessionId(sid);
+      }
       setCurrentSession(sid);
       setCurrentAgent(agent);
       setMessages([]);
       setStreamedText('');
       return sid;
     },
-    [client],
+    [engine],
   );
 
   const sendPrompt = useCallback(
     async (text: string) => {
-      if (!client || !currentSession || !text.trim()) return;
-      // Detect "first turn" against the *live* state via closure capture.
-      // The Hermes server treats prompt.submit text as user content, so we
-      // prefix the agent's system prompt into the first message. It's a
-      // best-effort priming; future versions should call session.system_prompt
-      // when the server exposes that RPC.
+      if (!engine || !currentSession || !text.trim()) return;
       const firstTurn = messages.length === 0;
-      const effectiveText = firstTurn && currentAgent
-        ? `[System: ${currentAgent.systemPrompt}]\n\n${text}`
-        : text;
+      const effectiveText =
+        firstTurn && currentAgent
+          ? `[System: ${currentAgent.systemPrompt}]\n\n${text}`
+          : text;
       const userMsg: ChatMessage = {role: 'user', text, ts: Date.now()};
       setMessages(prev => [...prev, userMsg]);
       setStreaming(true);
       setStreamedText('');
 
-      const off = client.onEvent((type, params) => {
-        if (params?.session_id && params.session_id !== currentSession) return;
-        if (type === 'message.delta') {
-          setStreamedText(prev => prev + (params.payload?.text ?? ''));
-        } else if (type === 'message.start') {
-          setStreamedText('');
-        }
-      });
+      const off =
+        engine.id === 'desktop'
+          ? ((engine as HermesEngine).client as HermesClient).onEvent(
+              (type, params) => {
+                if (
+                  params?.session_id &&
+                  params.session_id !== currentSession
+                )
+                  return;
+                if (type === 'message.delta') {
+                  setStreamedText(prev => prev + (params.payload?.text ?? ''));
+                } else if (type === 'message.start') {
+                  setStreamedText('');
+                }
+              },
+            )
+          : (engine as MinimaxEngine).onEvent((type, params) => {
+              if (
+                params?.session_id &&
+                params.session_id !== currentSession
+              )
+                return;
+              if (type === 'message.delta') {
+                setStreamedText(prev => prev + (params.payload?.text ?? ''));
+              } else if (type === 'message.start') {
+                setStreamedText('');
+              }
+            });
 
-      const handle = client.submitPrompt(effectiveText, currentSession);
+      const handle = engine.submitPrompt(effectiveText, currentSession);
       streamRef.current = handle;
       try {
         const result = await handle.done;
@@ -248,7 +438,11 @@ export function AppProvider({children}: {children: React.ReactNode}) {
       } catch (e: any) {
         setMessages(prev => [
           ...prev,
-          {role: 'assistant', text: `⚠️ ${e?.message ?? String(e)}`, ts: Date.now()},
+          {
+            role: 'assistant',
+            text: `⚠️ ${e?.message ?? String(e)}`,
+            ts: Date.now(),
+          },
         ]);
       } finally {
         off();
@@ -256,7 +450,7 @@ export function AppProvider({children}: {children: React.ReactNode}) {
         streamRef.current = null;
       }
     },
-    [client, currentSession, currentAgent, messages.length, streamRef],
+    [engine, currentSession, currentAgent, messages.length, streamRef],
   );
 
   const abortStream = useCallback(() => {
@@ -267,7 +461,13 @@ export function AppProvider({children}: {children: React.ReactNode}) {
   const value: AppState = {
     config,
     setConfig,
-    client,
+    engine,
+    engineClient: engine instanceof HermesEngine ? engine.client : null,
+    serverOnline,
+    engineLabel: engineLabel(
+      engine?.id ?? null,
+      (config.engineMode ?? 'auto') as any,
+    ),
     connecting,
     connectionError,
     screen,
@@ -275,6 +475,7 @@ export function AppProvider({children}: {children: React.ReactNode}) {
     connect,
     disconnect,
     logout,
+    switchEngine,
     currentSession,
     setCurrentSession,
     messages,
@@ -294,6 +495,7 @@ export function AppProvider({children}: {children: React.ReactNode}) {
     setCurrentAgent,
     currentNoteId,
     setCurrentNoteId,
+    offlineModeBanner,
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

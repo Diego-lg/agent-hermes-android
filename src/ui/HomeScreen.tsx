@@ -3,14 +3,18 @@
  * Theme-aware.
  */
 import React, {useEffect, useState} from 'react';
-import {View, ScrollView, TouchableOpacity, RefreshControl, Text} from 'react-native';
+import {View, ScrollView, TouchableOpacity, RefreshControl, Text, Alert} from 'react-native';
 import {useApp} from './AppContext';
 import {useTheme} from './theme.tsx';
 import {PlusIcon, RefreshIcon, ChevronRightIcon} from './icons';
 import {AGENT_CATALOG} from '../agents/catalog';
 
 export default function HomeScreen() {
-  const {client, config, sessions, refreshSessions, setScreen, openOrCreateSession, currentSession, setCurrentSession, setMessages} = useApp();
+  const {
+    engine, engineClient, serverOnline, engineLabel, config,
+    sessions, refreshSessions, setScreen, openOrCreateSession,
+    currentSession, setCurrentSession, setMessages, switchEngine,
+  } = useApp();
   const {palette, spacing, type, radii} = useTheme();
   const [refreshing, setRefreshing] = useState(false);
   const [usage, setUsage] = useState<{input: number; output: number; context_percent: number} | null>(null);
@@ -20,16 +24,19 @@ export default function HomeScreen() {
     setRefreshing(true);
     try {
       await refreshSessions();
-      if (currentSession) {
-        try { const u = await client?.sessionUsage(currentSession); if (u) setUsage(u); } catch {}
+      // Per-session usage + delegations are desktop-only RPCs.
+      if (engineClient && currentSession) {
+        try { const u = await engineClient.sessionUsage(currentSession); if (u) setUsage(u); } catch {}
       }
-      try { const subs = await client?.listDelegations(); setActiveSubs(subs?.length ?? 0); } catch {}
+      if (engineClient) {
+        try { const subs = await engineClient.listDelegations(); setActiveSubs(subs?.length ?? 0); } catch {}
+      }
     } finally {
       setRefreshing(false);
     }
   };
 
-  useEffect(() => { void onRefresh(); }, [client]);
+  useEffect(() => { void onRefresh(); }, [engineClient]);
 
   const recent = sessions.slice(0, 4);
   const greeting = (() => {
@@ -40,7 +47,23 @@ export default function HomeScreen() {
     return 'Good evening';
   })();
   const usagePercent = Math.min(100, Math.max(0, usage?.context_percent ?? 0));
-  const isSoft = palette.bg !== '#000000' && palette.bg !== '#0a0c0f';
+
+  // Long-press the engine pill to pin a specific engine. Useful when testing
+  // — e.g. force mobile-cloud even if the desktop is up, or force desktop
+  // and see the banner appear on the mobile-only screens.
+  const onEngineLongPress = () => {
+    const cur = config.engineMode ?? 'auto';
+    Alert.alert(
+      'Switch engine',
+      `Currently: ${cur.toUpperCase()}\n\nPick a pin mode. The app will reconnect.`,
+      [
+        {text: `AUTO${cur === 'auto' ? ' ✓' : ''}`, onPress: () => { void switchEngine('auto'); }},
+        {text: `DESKTOP${cur === 'desktop' ? ' ✓' : ''}`, onPress: () => { void switchEngine('desktop'); }},
+        {text: `MOBILE${cur === 'minimax' ? ' ✓' : ''}`, onPress: () => { void switchEngine('minimax'); }},
+        {text: 'Cancel', style: 'cancel'},
+      ],
+    );
+  };
 
   return (
     <ScrollView
@@ -51,17 +74,26 @@ export default function HomeScreen() {
           tintColor={palette.textMuted} colors={[palette.text]} />
       }>
       <View style={{paddingHorizontal: spacing.lg, paddingTop: spacing.xl}}>
-        {/* Status row */}
-        <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md}}>
+        {/* Engine status row — long-press to switch engine */}
+        <TouchableOpacity
+          onLongPress={onEngineLongPress}
+          delayLongPress={400}
+          activeOpacity={0.6}
+          style={{flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md}}>
           <View style={{
             width: 6, height: 6, borderRadius: 3,
-            backgroundColor: client ? palette.success : palette.error,
+            backgroundColor: serverOnline ? palette.success : (engine ? palette.textDim : palette.error),
             marginRight: 8,
           }} />
-          <Text style={type.label}>
-            {client ? 'SYSTEM ONLINE' : 'SYSTEM OFFLINE'}  ·  {config.host}
+          <Text style={type.label}>{engineLabel}</Text>
+          <View style={{width: 1, height: 12, backgroundColor: palette.border, marginHorizontal: spacing.sm}} />
+          <Text style={[type.monoMuted, {color: palette.textDim, fontSize: 10, flex: 1}]} numberOfLines={1}>
+            {serverOnline ? `${config.host}` : (engine ? 'minimax cloud' : 'not connected')}
           </Text>
-        </View>
+          <Text style={[type.monoMuted, {color: palette.textGhost, fontSize: 9, marginLeft: 6, letterSpacing: 0.5}]}>
+            HOLD TO SWITCH
+          </Text>
+        </TouchableOpacity>
 
         {/* Greeting */}
         <Text style={[type.display, {marginTop: spacing.sm}]}>
@@ -179,12 +211,19 @@ export default function HomeScreen() {
               key={s.id}
               activeOpacity={0.6}
               onPress={async () => {
-                if (!client) return;
-                client.setSessionId(s.id);
+                if (!engine) return;
+                // Tell the engine which session is now active. For the
+                // HermesEngine that calls setSessionId on the underlying
+                // client; for the MinimaxEngine it's a local pointer.
+                if (engine.id === 'desktop') {
+                  (engine as any).client.setSessionId?.(s.id);
+                } else {
+                  (engine as any).setSessionId?.(s.id);
+                }
                 setCurrentSession(s.id);
                 try {
-                  const h = await client.loadHistory(s.id);
-                  setMessages(h.map((m: any) => ({role: m.role, text: m.text ?? m.content ?? '', ts: m.ts ?? Date.now()})));
+                  const h = await engine.loadHistory(s.id);
+                  setMessages(h);
                 } catch { setMessages([]); }
                 setScreen('chat');
               }}
