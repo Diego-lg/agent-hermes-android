@@ -26,17 +26,29 @@ export interface HermesClientConfig {
   fetchImpl?: typeof fetch;
   /** Override WebSocket constructor for tests. */
   WebSocketImpl?: typeof WebSocket;
+  /** Silent auto-reconnect with exponential backoff after an unexpected
+   *  socket drop. Defaults to true. Tests that assert on close behaviour
+   *  can set this false to keep timing deterministic. */
+  autoReconnect?: boolean;
 }
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
   text: string;
+  /** Reasoning / chain-of-thought captured separately from the answer.
+   *  Populated for reasoning models (either a `reasoning_content` field or
+   *  `<think>…</think>` tags in the content). Rendered as a collapsible block. */
+  reasoning?: string;
   /** Set on assistant messages when the model emits a final usage block. */
   usage?: {
     input: number;
     output: number;
     total: number;
     context_percent: number;
+    /** Optional extended fields from the server (best-effort). */
+    context_used?: number;
+    context_max?: number;
+    calls?: number;
   };
   ts: number;
 }
@@ -47,6 +59,37 @@ export interface StreamHandle {
   done: Promise<{text: string; usage?: ChatMessage['usage']}>;
   /** Abort the in-flight turn (calls session.interrupt). */
   abort: () => void;
+  /** Inject guidance mid-turn without aborting (calls session.steer). */
+  steer?: (text: string) => void;
+}
+
+/** Options the user can override per turn before sending. */
+export interface PromptOptions {
+  /** Optional model id override for this turn (server-side). */
+  model?: string;
+  /** Reasoning effort ("minimal" | "low" | "medium" | "high" | "xhigh"). */
+  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+  /** Optional workspace / cwd the server should use for this session. */
+  workspace?: string;
+  /** Optional profile name (server-side Hermes profile). */
+  profile?: string;
+  /** Optional project id (organisational grouping). */
+  projectId?: string;
+}
+
+/** Lightweight summary record for the Sessions tab. */
+export interface SessionSummary {
+  id: string;
+  title?: string;
+  preview?: string;
+  started_at?: number;
+  last_active?: number;
+  message_count?: number;
+  model?: string;
+  status?: string;
+  source?: string;
+  /** True if cached locally (offline read). */
+  cached?: boolean;
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -61,6 +104,13 @@ export class HermesClient {
   private eventHandlers = new Set<(type: string, params: any) => void>();
   private reconnecting = false;
   private closed = false;
+  /** True once we've had at least one successful connection. Guards against
+   *  auto-reconnecting after an initial connect failure (the app's own
+   *  fallback logic owns that case). */
+  private connectedOnce = false;
+  private reconnectAttempts = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly maxReconnectAttempts = 8;
 
   constructor(cfg: HermesClientConfig) {
     this.cfg = cfg;
@@ -72,6 +122,11 @@ export class HermesClient {
     return this.ws !== null && this.ws.readyState === 1 /* OPEN */;
   }
 
+  /** True while a background reconnect is in progress (for a status banner). */
+  isReconnecting(): boolean {
+    return this.reconnecting;
+  }
+
   onEvent(handler: (type: string, params: any) => void): () => void {
     this.eventHandlers.add(handler);
     return () => this.eventHandlers.delete(handler);
@@ -80,11 +135,24 @@ export class HermesClient {
   /** Three-step auth + WS upgrade. Idempotent. */
   async connect(): Promise<void> {
     if (this.isConnected()) return;
+    // A fresh connect() cancels any in-flight reconnect and clears the
+    // intentional-close flag set by a prior disconnect().
+    this.cancelReconnect();
+    this.closed = false;
 
+    await this.login();               // Step 1: password login → cookies
+    await this.mintTicketAndOpen();   // Step 2+3: ws-ticket → WS upgrade
+
+    this.connectedOnce = true;
+    this.reconnectAttempts = 0;
+    this.reconnecting = false;
+  }
+
+  /* ----- auth steps (shared by connect() and reconnect) ----- */
+
+  /** Step 1: password login. Populates the cookie jar. */
+  private async login(): Promise<void> {
     const fetchFn = this.cfg.fetchImpl ?? globalThis.fetch;
-    const WS = this.cfg.WebSocketImpl ?? globalThis.WebSocket;
-
-    // Step 1: password login
     const loginRes = await fetchFn(this.baseHttp() + '/auth/password-login', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -103,8 +171,11 @@ export class HermesClient {
       );
     }
     this.absorbSetCookie(loginRes.headers.get('set-cookie'));
+  }
 
-    // Step 2: WS ticket
+  /** Step 2: mint a single-use WS ticket (30s TTL) using current cookies. */
+  private async mintTicket(): Promise<string> {
+    const fetchFn = this.cfg.fetchImpl ?? globalThis.fetch;
     const ticketRes = await fetchFn(this.baseHttp() + '/api/auth/ws-ticket', {
       method: 'POST',
       headers: {Cookie: this.cookieHeader()},
@@ -118,9 +189,100 @@ export class HermesClient {
     }
     const {ticket} = await ticketRes.json();
     if (!ticket) throw new HermesError('No ticket in response', 0);
+    return ticket;
+  }
 
-    // Step 3: WS upgrade
+  /** Step 2+3: mint a ticket and upgrade the WebSocket. */
+  private async mintTicketAndOpen(): Promise<void> {
+    const WS = this.cfg.WebSocketImpl ?? globalThis.WebSocket;
+    const ticket = await this.mintTicket();
     await this.openWebSocket(ticket, WS);
+  }
+
+  /**
+   * Re-establish a dropped connection. Tries to reuse the still-valid
+   * session cookie (mint a fresh ticket only). If the ticket mint is
+   * rejected (401/403 — the session expired), re-runs password login once
+   * and retries. The server-side session id is preserved on `this.sessionId`,
+   * so the resumed socket picks up the same conversation.
+   */
+  private async reestablish(): Promise<void> {
+    try {
+      await this.mintTicketAndOpen();
+    } catch (e) {
+      if (e instanceof HermesError && (e.code === 401 || e.code === 403)) {
+        await this.login();
+        await this.mintTicketAndOpen();
+      } else {
+        throw e;
+      }
+    }
+  }
+
+  /* ----- reconnect scheduling ----- */
+
+  /** Fan an event out to every registered handler (swallow handler errors). */
+  private emitEvent(type: string, params: any): void {
+    for (const h of this.eventHandlers) {
+      try { h(type, params); } catch { /* ignore */ }
+    }
+  }
+
+  /** Cancel any pending reconnect timer and reset backoff. */
+  private cancelReconnect(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnecting = false;
+    this.reconnectAttempts = 0;
+  }
+
+  /** Schedule a reconnect with exponential backoff + full jitter. */
+  private scheduleReconnect(): void {
+    if (this.cfg.autoReconnect === false) return;
+    if (this.closed) return;               // intentional disconnect
+    if (!this.connectedOnce) return;       // never successfully connected
+    if (this.reconnectTimer) return;       // already scheduled
+
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      this.reconnecting = false;
+      this.emitEvent('connection.failed', {attempts: this.reconnectAttempts});
+      // Surface a terminal error so the UI can prompt a manual retry.
+      this.emitEvent('error', {
+        message: `Lost connection to the server and could not reconnect after ${this.maxReconnectAttempts} attempts.`,
+      });
+      return;
+    }
+
+    this.reconnecting = true;
+    const attempt = this.reconnectAttempts++;
+    // base doubles each try, capped at 30s; full jitter halves the variance.
+    const ceiling = Math.min(30_000, 500 * 2 ** attempt);
+    const delay = Math.floor(ceiling / 2 + Math.random() * (ceiling / 2));
+    this.emitEvent('connection.reconnecting', {
+      attempt: attempt + 1,
+      max: this.maxReconnectAttempts,
+      delayMs: delay,
+    });
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.reconnectOnce();
+    }, delay);
+  }
+
+  /** One reconnect attempt. On success resets backoff; on failure re-schedules. */
+  private async reconnectOnce(): Promise<void> {
+    if (this.closed) return;
+    try {
+      await this.reestablish();
+      this.reconnectAttempts = 0;
+      this.reconnecting = false;
+      this.emitEvent('connection.restored', {session_id: this.sessionId});
+    } catch {
+      this.scheduleReconnect();
+    }
   }
 
   /** Create a new conversation session. Returns the session id. */
@@ -174,8 +336,11 @@ export class HermesClient {
    * Returns a handle whose `done` promise resolves when the server emits
    * `message.complete`. Intermediate deltas are dispatched through the
    * `onEvent` callback registered via `onEvent()`.
+   *
+   * `opts` (model, reasoning, workspace, profile, projectId) are forwarded
+   * to `prompt.submit` so the server can apply them per-turn.
    */
-  submitPrompt(text: string, sessionId?: string): StreamHandle {
+  submitPrompt(text: string, sessionId?: string, opts?: PromptOptions): StreamHandle {
     const sid = sessionId ?? this.sessionId;
     if (!sid) throw new HermesError('No session', 0);
     if (!this.isConnected()) throw new HermesError('Not connected', 0);
@@ -200,7 +365,14 @@ export class HermesClient {
       }
     });
 
-    void this.rpc('prompt.submit', {session_id: sid, text}).catch(err => {
+    const submitParams: any = {session_id: sid, text};
+    if (opts?.model) submitParams.model = opts.model;
+    if (opts?.reasoningEffort) submitParams.reasoning_effort = opts.reasoningEffort;
+    if (opts?.workspace) submitParams.workspace = opts.workspace;
+    if (opts?.profile) submitParams.profile = opts.profile;
+    if (opts?.projectId) submitParams.project_id = opts.projectId;
+
+    void this.rpc('prompt.submit', submitParams).catch(err => {
       off();
       rejectDone(err);
     });
@@ -211,6 +383,11 @@ export class HermesClient {
       abort: () => {
         off();
         void this.rpc('session.interrupt', {session_id: sid}).catch(() => {});
+      },
+      steer: (text: string) => {
+        // Inject guidance mid-turn without aborting. Fire and forget;
+        // the server applies the steer on its next tool-call boundary.
+        void this.rpc('session.steer', {session_id: sid, text}).catch(() => {});
       },
     };
   }
@@ -259,6 +436,135 @@ export class HermesClient {
     try { await this.rpc('delegation.pause', {id}); } catch { /* best effort */ }
   }
 
+  /** Project grouping (organisational; server-side via projects.list). */
+  async listProjects(): Promise<{projects: any[]; active_id: string | null}> {
+    try {
+      const r = await this.rpc('projects.list', {});
+      return {
+        projects: r?.projects ?? [],
+        active_id: r?.active_id ?? null,
+      };
+    } catch {
+      return {projects: [], active_id: null};
+    }
+  }
+
+  async setActiveProject(projectId: string | null): Promise<void> {
+    try { await this.rpc('project.activate', {project_id: projectId ?? ''}); } catch { /* best-effort */ }
+  }
+
+  /** Browse the active sessions (live, server-side view). */
+  async listActiveSessions(): Promise<SessionSummary[]> {
+    try {
+      const r = await this.rpc('session.active_list', {});
+      const list = r?.sessions ?? r?.active ?? [];
+      return list.map((s: any) => ({
+        id: s.id ?? s.session_id,
+        title: s.title,
+        preview: s.preview,
+        started_at: s.started_at,
+        last_active: s.last_active ?? s.started_at,
+        message_count: s.message_count,
+        model: s.model,
+        status: s.status,
+        source: s.source,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  /** Server's idea of the most recent session. */
+  async mostRecentSession(): Promise<SessionSummary | null> {
+    try {
+      const r = await this.rpc('session.most_recent', {});
+      if (!r?.session_id) return null;
+      return {
+        id: r.session_id,
+        title: r.title,
+        started_at: r.started_at,
+        source: r.source,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Browse slash-commands catalogued by the server. Returned as
+   *   [{name, description, usage}, ...]
+   * Tolerant of empty or oddly-shaped responses.
+   */
+  async listCommands(): Promise<Array<{name: string; description: string; usage?: string}>> {
+    try {
+      const r = await this.rpc('commands.catalog', {});
+      const pairs = r?.pairs ?? r?.commands ?? [];
+      const out: Array<{name: string; description: string; usage?: string}> = [];
+      for (const p of pairs) {
+        if (Array.isArray(p) && p.length >= 2) {
+          out.push({name: String(p[0]), description: String(p[1]), usage: p[2]});
+        } else if (p && typeof p === 'object') {
+          out.push({
+            name: p.name ?? p.command ?? '',
+            description: p.description ?? p.desc ?? '',
+            usage: p.usage,
+          });
+        }
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }
+
+  /** Read a single config key. Returns {value, display?, warning?} or null. */
+  async getConfig(key: string): Promise<{value: any; display?: string; warning?: string} | null> {
+    if (!this.isConnected()) return null;
+    try {
+      const r = await this.rpc('config.get', {key});
+      return r ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Set a single config key. Returns the server's response (may include a warning). */
+  async setConfig(key: string, value: any): Promise<any> {
+    return this.rpc('config.set', {key, value});
+  }
+
+  /**
+   * Attach a file (text/base64) to the active session. The server side
+   * reads it into context. Best-effort — older servers return "session
+   * not found" or "unknown method" and we swallow that.
+   */
+  async attachFile(sessionId: string, payload: {name: string; content: string; mime?: string}): Promise<void> {
+    try {
+      await this.rpc('file.attach', {session_id: sessionId, ...payload});
+    } catch {
+      // Older server: silently fail — the file is still embedded in the
+      // user's prompt text by the ChatScreen wrapper if needed.
+    }
+  }
+
+  /**
+   * Attach an image (base64) to the active session. Best-effort.
+   */
+  async attachImage(sessionId: string, payload: {name: string; data: string; mime?: string}): Promise<void> {
+    try {
+      await this.rpc('image.attach_bytes', {
+        session_id: sessionId,
+        name: payload.name,
+        data: payload.data,
+        mime: payload.mime ?? 'image/png',
+      });
+    } catch {
+      try {
+        await this.rpc('image.attach', {session_id: sessionId, ...payload});
+      } catch {/* best-effort */}
+    }
+  }
+
   /** Fire-and-forget a background prompt (no streaming, no ack). */
   async submitBackground(text: string, sessionId?: string): Promise<void> {
     const sid = sessionId ?? this.sessionId;
@@ -269,6 +575,7 @@ export class HermesClient {
   /** Tear down the WS. The client must `connect()` again before reuse. */
   disconnect(): void {
     this.closed = true;
+    this.cancelReconnect();
     if (this.ws) {
       try {this.ws.close();} catch { /* ignore */ }
       this.ws = null;
@@ -313,7 +620,8 @@ export class HermesClient {
   }
 
   private async openWebSocket(ticket: string, WS: typeof WebSocket): Promise<void> {
-    this.closed = false;
+    // Note: `closed` is managed by connect()/disconnect() only, so a stale
+    // socket opening during a reconnect race can't resurrect a closed client.
     return new Promise<void>((resolve, reject) => {
       const url = `${this.baseWs()}/api/ws?ticket=${encodeURIComponent(ticket)}`;
       const ws = new WS(url);
@@ -366,18 +674,17 @@ export class HermesClient {
   private handleClose(ev: any): void {
     const code = ev?.code ?? 0;
     this.ws = null;
-    // Reject all pending
+    // Reject all pending RPCs (this also ends any in-flight chat turn).
     for (const {reject, method} of this.pending.values()) {
       reject(new HermesError(`WS closed (${code}) during ${method}`, code));
     }
     this.pending.clear();
-    if (!this.closed && !this.reconnecting) {
-      // Server kicked us. Surface via a synthetic error event so the UI
-      // can show "Disconnected" and offer reconnect.
-      for (const h of this.eventHandlers) {
-        try {h('error', {message: `WS closed (code ${code})`});} catch { /* ignore */ }
-      }
-    }
+    if (this.closed) return; // intentional disconnect — stay down
+    // Unexpected drop (server kick, Wi-Fi roam, phone sleep). Try to
+    // recover silently with backoff instead of surfacing a hard error;
+    // scheduleReconnect() emits a terminal `error` only once it gives up.
+    this.emitEvent('connection.lost', {code});
+    this.scheduleReconnect();
   }
 
   /** Execute a single JSON-RPC call. Public so sub-clients (cron, notes AI) can call too. */

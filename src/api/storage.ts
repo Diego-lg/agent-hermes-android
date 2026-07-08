@@ -49,4 +49,18 @@ export const STORAGE_KEYS = {
   notes: 'hermes.notes',
   cronJobs: 'hermes.cron',
   serverProfiles: 'hermes.servers',
+  // Chat options (per-turn overrides)
+  chatOptions: 'hermes.chatOptions',
+  // Recents / favorites for the Models tab
+  recentModels: 'hermes.recentModels',
+  favoriteModels: 'hermes.favoriteModels',
+  // Session cache for offline read in the Sessions tab
+  sessionCache: 'hermes.sessionCache',
+  // Per-session message history, cached for offline reading
+  sessionHistory: 'hermes.sessionHistory',
+  // Memory read snapshot (read-only panel)
+  memorySnapshot: 'hermes.memorySnapshot',
+  // Active profile (server-side Hermes profile) and active workspace
+  activeProfile: 'hermes.activeProfile',
+  activeWorkspace: 'hermes.activeWorkspace',
 } as const;

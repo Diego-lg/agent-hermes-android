@@ -4,6 +4,7 @@
  */
 import React, {useEffect, useState} from 'react';
 import {View, StatusBar} from 'react-native';
+import {SafeAreaProvider} from 'react-native-safe-area-context';
 import {AppProvider, useApp} from './src/ui/AppContext';
 import {ThemeController, useThemeController} from './src/ui/ThemeController';
 import {BottomNav, Tab} from './src/ui/BottomNav';
@@ -16,6 +17,14 @@ import LoginScreen from './src/ui/LoginScreen';
 import NotesScreen from './src/ui/NotesScreen';
 import NoteEditorScreen from './src/ui/NoteEditorScreen';
 import CronScreen from './src/ui/CronScreen';
+import SessionsScreen from './src/ui/SessionsScreen';
+import ModelsScreen from './src/ui/ModelsScreen';
+import ProfilesScreen from './src/ui/ProfilesScreen';
+import TasksScreen from './src/ui/TasksScreen';
+import SkillsScreen from './src/ui/SkillsScreen';
+import WorkspaceScreen from './src/ui/WorkspaceScreen';
+import MemoryScreen from './src/ui/MemoryScreen';
+import InsightsScreen from './src/ui/InsightsScreen';
 import {notesStore} from './src/api/notesStore';
 
 function Shell() {
@@ -70,6 +79,14 @@ function Shell() {
         {screen === 'notes' && <NotesScreen />}
         {screen === 'noteEditor' && <NoteEditorScreen />}
         {screen === 'cron' && <CronScreen />}
+        {screen === 'sessions' && <SessionsScreen />}
+        {screen === 'models' && <ModelsScreen />}
+        {screen === 'profiles' && <ProfilesScreen />}
+        {screen === 'tasks' && <TasksScreen />}
+        {screen === 'skills' && <SkillsScreen />}
+        {screen === 'workspace' && <WorkspaceScreen />}
+        {screen === 'memory' && <MemoryScreen />}
+        {screen === 'insights' && <InsightsScreen />}
       </View>
       <BottomNav
         active={tab}
@@ -105,10 +122,12 @@ function isDarkBg(bg: string): boolean {
 
 export default function App() {
   return (
-    <ThemeController>
-      <AppProvider>
-        <Shell />
-      </AppProvider>
-    </ThemeController>
+    <SafeAreaProvider>
+      <ThemeController>
+        <AppProvider>
+          <Shell />
+        </AppProvider>
+      </ThemeController>
+    </SafeAreaProvider>
   );
 }

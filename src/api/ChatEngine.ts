@@ -13,7 +13,7 @@
  * surfaced through `onEvent()` exactly like the WebSocket engine did
  * before this refactor.
  */
-import {ChatMessage, HermesClient, HermesError, StreamHandle} from './hermesClient';
+import {ChatMessage, HermesClient, HermesError, StreamHandle, SessionSummary, PromptOptions} from './hermesClient';
 import {kv, STORAGE_KEYS} from './storage';
 
 export type EngineId = 'desktop' | 'minimax';
@@ -24,8 +24,8 @@ export interface ChatEngine {
   isAvailable(): Promise<boolean>;
   /** Create a new conversation. Returns a session id (engine-local). */
   createSession(title?: string): Promise<string>;
-  /** Send a prompt and stream the response. */
-  submitPrompt(text: string, sessionId?: string): StreamHandle;
+  /** Send a prompt and stream the response. `opts` carries per-turn overrides. */
+  submitPrompt(text: string, sessionId?: string, opts?: PromptOptions): StreamHandle;
   /** Subscribe to engine-level events (deltas, complete, error). Returns unsubscribe. */
   onEvent(handler: (type: string, params: any) => void): () => void;
   /** Best-effort: load prior messages for a session. */
@@ -34,6 +34,20 @@ export interface ChatEngine {
   listSessions?(limit?: number): Promise<any[]>;
   /** Best-effort: list models the engine knows about. Empty array if not supported. */
   listModels?(): Promise<any[]>;
+  /** Best-effort: list the slash-command catalog ("skills"). Empty if not supported. */
+  listCommands?(): Promise<Array<{name: string; description: string; usage?: string}>>;
+  /** Best-effort: list projects the server knows about. */
+  listProjects?(): Promise<{projects: any[]; active_id: string | null}>;
+  /** Best-effort: list live (active) sessions. */
+  listActiveSessions?(): Promise<SessionSummary[]>;
+  /** Best-effort: read a single config key from the server. */
+  getConfig?(key: string): Promise<{value: any; display?: string; warning?: string} | null>;
+  /** Best-effort: set a config key on the server. */
+  setConfig?(key: string, value: any): Promise<any>;
+  /** Best-effort: attach a text/base64 file to a session. */
+  attachFile?(sessionId: string, payload: {name: string; content: string; mime?: string}): Promise<void>;
+  /** Best-effort: attach an image to a session. */
+  attachImage?(sessionId: string, payload: {name: string; data: string; mime?: string}): Promise<void>;
   /** Free any sockets / timers. */
   disconnect(): void;
 }
@@ -57,8 +71,8 @@ export class HermesEngine implements ChatEngine {
     return this.client.createSession(title);
   }
 
-  submitPrompt(text: string, sessionId?: string): StreamHandle {
-    return this.client.submitPrompt(text, sessionId);
+  submitPrompt(text: string, sessionId?: string, opts?: any): StreamHandle {
+    return this.client.submitPrompt(text, sessionId, opts);
   }
 
   async loadHistory(sessionId: string): Promise<ChatMessage[]> {
@@ -82,6 +96,42 @@ export class HermesEngine implements ChatEngine {
 
   async listModels(): Promise<any[]> {
     return this.client.listModels();
+  }
+
+  async listCommands() {
+    return this.client.listCommands();
+  }
+
+  async listProjects() {
+    return this.client.listProjects();
+  }
+
+  async listActiveSessions() {
+    return this.client.listActiveSessions();
+  }
+
+  async mostRecentSession() {
+    return this.client.mostRecentSession();
+  }
+
+  async getConfig(key: string) {
+    return this.client.getConfig(key);
+  }
+
+  async setConfig(key: string, value: any) {
+    return this.client.setConfig(key, value);
+  }
+
+  async attachFile(sessionId: string, payload: {name: string; content: string; mime?: string}) {
+    return this.client.attachFile(sessionId, payload);
+  }
+
+  async attachImage(sessionId: string, payload: {name: string; data: string; mime?: string}) {
+    return this.client.attachImage(sessionId, payload);
+  }
+
+  async setActiveProject(projectId: string | null) {
+    return this.client.setActiveProject(projectId);
   }
 
   onEvent(handler: (type: string, params: any) => void): () => void {
@@ -187,7 +237,40 @@ export class MinimaxEngine implements ChatEngine {
     raw: string,
     sid: string,
     append: (chunk: string) => void,
+    appendReasoning: (chunk: string) => void = () => {},
   ): void {
+    // Routing state: reasoning models interleave chain-of-thought with the
+    // answer using <think>…</think> tags inside `content`. We walk each
+    // content chunk and split it so the answer bubble never shows raw tags.
+    let inThink = false;
+    const emitAnswer = (s: string) => {
+      if (!s) return;
+      this.emit('message.delta', {session_id: sid, payload: {text: s}});
+      append(s);
+    };
+    const emitReasoning = (s: string) => {
+      if (!s) return;
+      this.emit('reasoning.delta', {session_id: sid, payload: {text: s}});
+      appendReasoning(s);
+    };
+    const routeContent = (chunk: string) => {
+      let buf = chunk;
+      while (buf.length) {
+        if (!inThink) {
+          const open = buf.indexOf('<think>');
+          if (open === -1) { emitAnswer(buf); return; }
+          emitAnswer(buf.slice(0, open));
+          inThink = true;
+          buf = buf.slice(open + 7);
+        } else {
+          const close = buf.indexOf('</think>');
+          if (close === -1) { emitReasoning(buf); return; }
+          emitReasoning(buf.slice(0, close));
+          inThink = false;
+          buf = buf.slice(close + 8);
+        }
+      }
+    };
     const text = raw ?? '';
     if (!text || !text.trim()) {
       this.emit('error', {session_id: sid, message: 'Provider returned an empty response body. Check your model id and key.'});
@@ -200,27 +283,32 @@ export class MinimaxEngine implements ChatEngine {
     if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
       try {
         const j = JSON.parse(trimmed);
+        // Reasoning content (DeepSeek-R1 / MiniMax M-series expose it as a
+        // sibling field of `content`). Route it to the thinking block.
+        const rc0 = j?.choices?.[0]?.message?.reasoning_content ?? j?.choices?.[0]?.message?.reasoning;
+        if (typeof rc0 === 'string' && rc0.length > 0) emitReasoning(rc0);
         // OpenAI non-streaming shape: choices[].message.content
         const content = j?.choices?.[0]?.message?.content;
         if (typeof content === 'string' && content.length > 0) {
-          this.emit('message.delta', {session_id: sid, payload: {text: content}});
-          append(content);
+          routeContent(content);
           return;
         }
+        if (typeof rc0 === 'string' && rc0.length > 0) return;
         // OpenAI non-streaming shape: choices[].text (legacy / some providers)
         const legacyContent = j?.choices?.[0]?.text;
         if (typeof legacyContent === 'string' && legacyContent.length > 0) {
-          this.emit('message.delta', {session_id: sid, payload: {text: legacyContent}});
-          append(legacyContent);
+          routeContent(legacyContent);
           return;
         }
         // Streaming but server only sent the final chunk without [DONE]
+        const finalRc = j?.choices?.[0]?.delta?.reasoning_content ?? j?.choices?.[0]?.delta?.reasoning;
+        if (typeof finalRc === 'string' && finalRc.length > 0) emitReasoning(finalRc);
         const finalDelta = j?.choices?.[0]?.delta?.content;
         if (typeof finalDelta === 'string' && finalDelta.length > 0) {
-          this.emit('message.delta', {session_id: sid, payload: {text: finalDelta}});
-          append(finalDelta);
+          routeContent(finalDelta);
           return;
         }
+        if (typeof finalRc === 'string' && finalRc.length > 0) return;
         // The body parsed as JSON but had no content. Maybe an error object.
         if (j?.error) {
           const msg = j.error?.message ?? j.error?.code ?? JSON.stringify(j.error);
@@ -249,6 +337,7 @@ export class MinimaxEngine implements ChatEngine {
         if (!data) continue;
         if (data === '[DONE]') continue;
         let chunk = '';
+        let rchunk = '';
         let parsed: any = null;
         try {
           parsed = JSON.parse(data);
@@ -257,14 +346,22 @@ export class MinimaxEngine implements ChatEngine {
             parsed?.choices?.[0]?.message?.content ??
             parsed?.choices?.[0]?.text ??
             '';
+          rchunk =
+            parsed?.choices?.[0]?.delta?.reasoning_content ??
+            parsed?.choices?.[0]?.delta?.reasoning ??
+            parsed?.choices?.[0]?.message?.reasoning_content ??
+            '';
         } catch {
           // Non-JSON `data:` line — likely a provider comment or
           // heartbeat. Skip.
           continue;
         }
+        if (typeof rchunk === 'string' && rchunk.length > 0) {
+          emitReasoning(rchunk);
+          emittedAny = true;
+        }
         if (typeof chunk === 'string' && chunk.length > 0) {
-          this.emit('message.delta', {session_id: sid, payload: {text: chunk}});
-          append(chunk);
+          routeContent(chunk);
           emittedAny = true;
         } else if (parsed && parsed.error) {
           // SSE error event (e.g. {"error": {"message": "..."}})
@@ -333,7 +430,7 @@ export class MinimaxEngine implements ChatEngine {
     }
   }
 
-  submitPrompt(text: string, sessionId?: string): StreamHandle {
+  submitPrompt(text: string, sessionId?: string, opts?: PromptOptions): StreamHandle {
     const sid = sessionId ?? this.currentSessionId;
     if (!sid) throw new HermesError('No session', 0);
     if (!this.cfg.apiKey) throw new HermesError('API key missing', 0);
@@ -357,6 +454,7 @@ export class MinimaxEngine implements ChatEngine {
 
     void (async () => {
       let assistantText = '';
+      let assistantReasoning = '';
       const off = this.onEvent((type, params) => {
         if (params?.session_id && params.session_id !== sid) return;
         if (type === 'message.complete') {
@@ -400,20 +498,24 @@ export class MinimaxEngine implements ChatEngine {
         // code path.
         const rawText = await r.text();
         if (rawText) {
-          this.parseAndEmit(rawText, sid, (chunk) => {
-            assistantText += chunk;
-          });
+          this.parseAndEmit(
+            rawText,
+            sid,
+            (chunk) => { assistantText += chunk; },
+            (chunk) => { assistantReasoning += chunk; },
+          );
         }
 
         sess.messages.push({
           role: 'assistant',
           text: assistantText,
+          reasoning: assistantReasoning || undefined,
           ts: Date.now(),
         });
         await this.persistCache();
         this.emit('message.complete', {
           session_id: sid,
-          payload: {text: assistantText},
+          payload: {text: assistantText, reasoning: assistantReasoning || undefined},
         });
       } catch (e: any) {
         if (e?.name !== 'AbortError') {

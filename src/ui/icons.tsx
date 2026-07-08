@@ -146,6 +146,8 @@ export const CheckIcon = make(<Polyline points="20 6 9 17 4 12" />);
 
 export const ChevronLeftIcon = make(<Polyline points="15 18 9 12 15 6" />);
 export const ChevronRightIcon = make(<Polyline points="9 18 15 12 9 6" />);
+export const ChevronDownIcon = make(<Polyline points="6 9 12 15 18 9" />);
+export const ChevronUpIcon = make(<Polyline points="18 15 12 9 6 15" />);
 export const PlayIcon = make(<Polygon points="6 3 20 12 6 21 6 3" />);
 export const SaveIcon = make(
   <>
@@ -427,4 +429,79 @@ export const IconBadge: React.FC<{
     }}>
     <Icon size={size} color={color} />
   </View>
+);
+
+export const FolderIcon = make(
+  <Path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
+);
+
+export const FolderFilled = make(
+  <Path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
+);
+
+export const DatabaseIcon = make(
+  <>
+    <Path d="M4 6c0-1.5 3.6-3 8-3s8 1.5 8 3-3.6 3-8 3-8-1.5-8-3z" />
+    <Path d="M4 6v6c0 1.5 3.6 3 8 3s8-1.5 8-3V6" />
+    <Path d="M4 12v6c0 1.5 3.6 3 8 3s8-1.5 8-3v-6" />
+  </>,
+);
+
+export const DatabaseFilled = make(
+  <Path d="M4 6c0-1.5 3.6-3 8-3s8 1.5 8 3-3.6 3-8 3-8-1.5-8-3zm0 6c0 1.5 3.6 3 8 3s8-1.5 8-3v6c0 1.5-3.6 3-8 3s-8-1.5-8-3z" />,
+);
+
+export const ChartBarIcon = make(
+  <>
+    <Line x1="4" y1="20" x2="20" y2="20" />
+    <Rect x="6" y="12" width="3" height="6" />
+    <Rect x="11" y="8" width="3" height="10" />
+    <Rect x="16" y="4" width="3" height="14" />
+  </>,
+);
+
+export const StarIcon = make(
+  <Polygon points="12 2 15 8.5 22 9.3 17 14.1 18.2 21 12 17.8 5.8 21 7 14.1 2 9.3 9 8.5" />,
+);
+
+export const StarFilled = make(
+  <Polygon points="12 2 15 8.5 22 9.3 17 14.1 18.2 21 12 17.8 5.8 21 7 14.1 2 9.3 9 8.5" />,
+);
+
+export const BookmarkIcon = make(
+  <Path d="M6 3h12v18l-6-4-6 4z" />,
+);
+
+export const LayersIcon = make(
+  <>
+    <Polygon points="12 2 22 8 12 14 2 8" />
+    <Polygon points="2 14 12 20 22 14" />
+  </>,
+);
+
+export const CompassIcon = make(
+  <>
+    <Circle cx="12" cy="12" r="9" />
+    <Polygon points="15.5 8.5 11 11 8.5 15.5 13 13" />
+  </>,
+);
+
+export const HashIcon = make(
+  <>
+    <Line x1="4" y1="9" x2="20" y2="9" />
+    <Line x1="4" y1="15" x2="20" y2="15" />
+    <Line x1="10" y1="3" x2="8" y2="21" />
+    <Line x1="16" y1="3" x2="14" y2="21" />
+  </>,
+);
+
+export const PaperclipIcon = make(
+  <Path d="M21.4 11.6 12.5 20.5a5.5 5.5 0 1 1-7.8-7.8l8.9-8.9a3.7 3.7 0 0 1 5.2 5.2l-8.9 8.9a1.8 1.8 0 0 1-2.6-2.6L15 7.7" />,
+);
+
+export const CameraIcon = make(
+  <>
+    <Path d="M4 8h3l2-2h6l2 2h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" />
+    <Circle cx="12" cy="13" r="3.5" />
+  </>,
 );

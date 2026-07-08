@@ -13,7 +13,7 @@
  *     status row, ChatScreen header). User can pin from Settings.
  */
 import React, {createContext, useContext, useState, useEffect, useCallback, useMemo} from 'react';
-import {HermesClient, ChatMessage, StreamHandle, HermesError} from '../api/hermesClient';
+import {HermesClient, ChatMessage, StreamHandle, HermesError, SessionSummary, PromptOptions} from '../api/hermesClient';
 import {AppConfig, makeConfigStore} from '../api/configStore';
 import {agentById, AgentDef} from '../agents/catalog';
 import {
@@ -23,10 +23,13 @@ import {
   pickMinimaxCfg,
   EngineId,
 } from '../api/ChatEngine';
+import {ChatOptions, ChatOptionsStore, makeChatOptionsStore, ModelsListStore, makeModelsListStore, SessionCacheStore, makeSessionCacheStore, SessionHistoryCacheStore, makeSessionHistoryCacheStore} from '../api/chatOptionsStore';
+import {kv, STORAGE_KEYS} from '../api/storage';
 
 export type Screen =
   | 'home' | 'chat' | 'agents' | 'settings' | 'profile' | 'login'
-  | 'notes' | 'noteEditor' | 'cron';
+  | 'notes' | 'noteEditor' | 'cron'
+  | 'sessions' | 'models' | 'profiles' | 'tasks' | 'skills' | 'workspace' | 'memory' | 'insights';
 
 export interface SessionInfo {
   id: string;
@@ -67,6 +70,9 @@ export interface AppState {
   setStreaming: (s: boolean) => void;
   streamedText: string;
   setStreamedText: (t: string) => void;
+  /** Live chain-of-thought for the in-flight turn (reasoning models). */
+  streamedReasoning: string;
+  setStreamedReasoning: (t: string) => void;
   streamRef: React.MutableRefObject<StreamHandle | null>;
   sendPrompt: (text: string) => Promise<void>;
   abortStream: () => void;
@@ -82,6 +88,45 @@ export interface AppState {
   setCurrentNoteId: (id: string | null) => void;
   /** Was the last chat message generated offline (no PC tools)? */
   offlineModeBanner: boolean;
+  /** True when the currently-open session was loaded from the offline cache
+   *  (server unreachable) rather than fetched live — the UI can show a
+   *  "cached / read-only" marker. */
+  offlineHistoryBanner: boolean;
+  /** Per-turn chat options (model id, reasoning, workspace, profile, agent). */
+  chatOptions: ChatOptions;
+  setChatOptions: (opts: ChatOptions) => void;
+  patchChatOption: <K extends keyof ChatOptions>(key: K, value: ChatOptions[K]) => void;
+  /** Persisted recent + favorite model ids for the Models tab. */
+  recentModels: string[];
+  favoriteModels: string[];
+  pushRecentModel: (m: string) => Promise<void>;
+  toggleFavoriteModel: (m: string) => Promise<boolean>;
+  /** Cached offline sessions (read-only when server unreachable). */
+  cachedSessions: SessionSummary[];
+  refreshCachedSessions: () => Promise<void>;
+  /** Inject guidance mid-turn without aborting (session.steer). */
+  steerStream: (text: string) => void;
+  /** Resume a past session — sets currentSession, loads history. */
+  resumeSession: (id: string) => Promise<void>;
+  /** Attach a file (text) to the current session. Best-effort. */
+  attachTextFile: (name: string, content: string, mime?: string) => Promise<void>;
+  /** Attach an image (base64) to the current session. Best-effort. */
+  attachImageFile: (name: string, base64: string, mime?: string) => Promise<void>;
+  /** Currently-queued attachments (cleared after a successful submit). */
+  pendingAttachments: Array<{id: string; kind: 'file' | 'image'; name: string; size?: number}>;
+  addAttachment: (a: {kind: 'file' | 'image'; name: string; size?: number}) => void;
+  removeAttachment: (id: string) => void;
+  clearAttachments: () => void;
+  /** Active Hermes profile + workspace (independent of per-turn chatOptions). */
+  activeProfile: string | null;
+  setActiveProfile: (id: string | null) => void;
+  activeWorkspace: string | null;
+  setActiveWorkspace: (path: string | null) => void;
+  /** List of projects the server knows about. */
+  projects: any[];
+  activeProjectId: string | null;
+  refreshProjects: () => Promise<void>;
+  setActiveProject: (id: string | null) => Promise<void>;
 }
 
 const Ctx = createContext<AppState | null>(null);
@@ -100,6 +145,10 @@ function engineLabel(id: EngineId | null, mode: 'auto' | 'desktop' | 'minimax'):
 
 export function AppProvider({children}: {children: React.ReactNode}) {
   const store = useMemo(() => makeConfigStore(), []);
+  const optsStore = useMemo(() => makeChatOptionsStore(), []);
+  const modelsStore = useMemo(() => makeModelsListStore(), []);
+  const sessionCache = useMemo(() => makeSessionCacheStore(), []);
+  const historyCache = useMemo(() => makeSessionHistoryCacheStore(), []);
   // Start with the hardcoded default so the UI can render immediately
   // (LoginScreen, etc.). The real saved config is loaded async in the
   // effect below and replaces it. We do NOT use a "loading" gate here
@@ -160,16 +209,59 @@ export function AppProvider({children}: {children: React.ReactNode}) {
     return () => { cancelled = true; };
   }, [store]);
 
+  // Load persisted chat options, recents/favorites, cached sessions, profile, workspace.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [opts, rec, fav, sc, prof, ws] = await Promise.all([
+          optsStore.load(),
+          modelsStore.getRecents(),
+          modelsStore.getFavorites(),
+          sessionCache.load(),
+          kv.getItem(STORAGE_KEYS.activeProfile),
+          kv.getItem(STORAGE_KEYS.activeWorkspace),
+        ]);
+        if (cancelled) return;
+        setChatOptionsState(opts);
+        setRecentModels(rec);
+        setFavoriteModels(fav);
+        setCachedSessions(sc);
+        setActiveProfileState(prof);
+        setActiveWorkspaceState(ws);
+      } catch {
+        /* fine — defaults stay */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [optsStore, modelsStore, sessionCache]);
+
   const [currentSession, setCurrentSession] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [streamedText, setStreamedText] = useState('');
+  const [streamedReasoning, setStreamedReasoning] = useState('');
   const streamRef = useMemo(() => ({current: null as StreamHandle | null}), []);
 
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [currentAgent, setCurrentAgent] = useState<AgentDef | null>(null);
   const [currentNoteId, setCurrentNoteId] = useState<string | null>(null);
   const [offlineModeBanner, setOfflineModeBanner] = useState(false);
+  const [offlineHistoryBanner, setOfflineHistoryBanner] = useState(false);
+
+  // Per-turn chat options
+  const [chatOptions, setChatOptionsState] = useState<ChatOptions>({
+    modelLabel: 'auto',
+    reasoningEffort: 'medium',
+  });
+  const [recentModels, setRecentModels] = useState<string[]>([]);
+  const [favoriteModels, setFavoriteModels] = useState<string[]>([]);
+  const [cachedSessions, setCachedSessions] = useState<SessionSummary[]>([]);
+  const [pendingAttachments, setPendingAttachments] = useState<Array<{id: string; kind: 'file' | 'image'; name: string; size?: number}>>([]);
+  const [activeProfile, setActiveProfileState] = useState<string | null>(null);
+  const [activeWorkspace, setActiveWorkspaceState] = useState<string | null>(null);
+  const [projects, setProjects] = useState<any[]>([]);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
 
   const setConfig = useCallback(
     (c: AppConfig) => {
@@ -347,6 +439,24 @@ export function AppProvider({children}: {children: React.ReactNode}) {
             updated_at: s.updated_at ?? s.last_active,
           })),
         );
+        // Mirror the list into the offline cache so the Sessions tab still
+        // renders when the desktop is later unreachable.
+        try {
+          const summaries: SessionSummary[] = list2.map((s: any) => ({
+            id: s.id ?? s.session_id,
+            title: s.title,
+            preview: s.preview,
+            started_at: s.started_at,
+            last_active: s.last_active ?? s.updated_at,
+            message_count: s.message_count,
+            model: s.model,
+            status: s.status,
+            source: s.source,
+            cached: true,
+          }));
+          await sessionCache.save(summaries);
+          setCachedSessions(summaries);
+        } catch { /* cache write is best-effort */ }
       } else {
         const list = await (engine as MinimaxEngine).listSessions();
         setSessions(list.map(s => ({id: s.id, title: s.title})));
@@ -354,7 +464,7 @@ export function AppProvider({children}: {children: React.ReactNode}) {
     } catch {
       // Non-fatal.
     }
-  }, [engine]);
+  }, [engine, sessionCache]);
 
   const appendMessage = useCallback((m: ChatMessage) => {
     setMessages(prev => [...prev, m]);
@@ -393,48 +503,71 @@ export function AppProvider({children}: {children: React.ReactNode}) {
       setMessages(prev => [...prev, userMsg]);
       setStreaming(true);
       setStreamedText('');
+      setStreamedReasoning('');
+
+      // Build the per-turn options object from chatOptions state.
+      const turnOpts: PromptOptions = {};
+      if (chatOptions.model && chatOptions.modelLabel !== 'auto') {
+        turnOpts.model = chatOptions.model;
+      }
+      if (chatOptions.reasoningEffort) {
+        turnOpts.reasoningEffort = chatOptions.reasoningEffort;
+      }
+      if (activeWorkspace) turnOpts.workspace = activeWorkspace;
+      if (activeProfile) turnOpts.profile = activeProfile;
+      if (activeProjectId) turnOpts.projectId = activeProjectId;
+
+      // Accumulate reasoning locally so we can attach it to the finished
+      // message (the engine `done` promise only carries the answer text).
+      let reasoningAccum = '';
+      const handleStreamEvent = (type: string, params: any) => {
+        if (params?.session_id && params.session_id !== currentSession) return;
+        if (type === 'message.delta') {
+          setStreamedText(prev => prev + (params.payload?.text ?? ''));
+        } else if (type === 'reasoning.delta') {
+          const t = params.payload?.text ?? '';
+          reasoningAccum += t;
+          setStreamedReasoning(prev => prev + t);
+        } else if (type === 'message.start') {
+          setStreamedText('');
+          setStreamedReasoning('');
+          reasoningAccum = '';
+        }
+      };
 
       const off =
         engine.id === 'desktop'
-          ? ((engine as HermesEngine).client as HermesClient).onEvent(
-              (type, params) => {
-                if (
-                  params?.session_id &&
-                  params.session_id !== currentSession
-                )
-                  return;
-                if (type === 'message.delta') {
-                  setStreamedText(prev => prev + (params.payload?.text ?? ''));
-                } else if (type === 'message.start') {
-                  setStreamedText('');
-                }
-              },
-            )
-          : (engine as MinimaxEngine).onEvent((type, params) => {
-              if (
-                params?.session_id &&
-                params.session_id !== currentSession
-              )
-                return;
-              if (type === 'message.delta') {
-                setStreamedText(prev => prev + (params.payload?.text ?? ''));
-              } else if (type === 'message.start') {
-                setStreamedText('');
-              }
-            });
+          ? ((engine as HermesEngine).client as HermesClient).onEvent(handleStreamEvent)
+          : (engine as MinimaxEngine).onEvent(handleStreamEvent);
 
-      const handle = engine.submitPrompt(effectiveText, currentSession);
+      const handle = engine.submitPrompt(effectiveText, currentSession, turnOpts);
       streamRef.current = handle;
       try {
         const result = await handle.done;
         const assistantMsg: ChatMessage = {
           role: 'assistant',
           text: result.text,
+          reasoning: reasoningAccum || undefined,
           usage: result.usage,
           ts: Date.now(),
         };
         setMessages(prev => [...prev, assistantMsg]);
         setStreamedText('');
+        setStreamedReasoning('');
+        // Successful submit — clear any queued attachments.
+        setPendingAttachments([]);
+        // Write-through the freshest conversation to the offline cache so
+        // it's readable later without the LAN server. (Minimax persists its
+        // own sessions internally, so only cache desktop turns here.)
+        if (engine.id === 'desktop' && currentSession) {
+          const full = [...messages, userMsg, assistantMsg];
+          void historyCache.put(currentSession, full, currentAgent?.name);
+        }
+        // Track the model in recents (best-effort).
+        if (chatOptions.model) {
+          await modelsStore.pushRecent(chatOptions.model);
+          setRecentModels(await modelsStore.getRecents());
+        }
       } catch (e: any) {
         setMessages(prev => [
           ...prev,
@@ -450,8 +583,138 @@ export function AppProvider({children}: {children: React.ReactNode}) {
         streamRef.current = null;
       }
     },
-    [engine, currentSession, currentAgent, messages.length, streamRef],
+    [engine, currentSession, currentAgent, messages, streamRef, chatOptions, activeWorkspace, activeProfile, activeProjectId, modelsStore, historyCache],
   );
+
+  /** Inject guidance into an in-flight turn without aborting. */
+  const steerStream = useCallback((text: string) => {
+    streamRef.current?.steer?.(text);
+  }, [streamRef]);
+
+  /** Resume a previously-existing session (load history, set active).
+   *  Live fetch is write-through cached; if it fails (server offline) we
+   *  fall back to the last cached snapshot so the conversation is still
+   *  readable. */
+  const resumeSession = useCallback(async (id: string) => {
+    if (!engine) return;
+    setCurrentSession(id);
+    if (engine.id === 'desktop') {
+      (engine as HermesEngine)['client']?.setSessionId?.(id);
+    } else {
+      (engine as MinimaxEngine).setSessionId(id);
+    }
+
+    let loaded: ChatMessage[] | null = null;
+    try {
+      const hist = await engine.loadHistory(id);
+      if (hist && hist.length) {
+        loaded = hist;
+        setOfflineHistoryBanner(false);
+        // Cache live desktop history for offline reading later. (Minimax
+        // already persists its own sessions, so skip it there.)
+        if (engine.id === 'desktop') {
+          void historyCache.put(id, hist, sessions.find(s => s.id === id)?.title);
+        }
+      }
+    } catch {
+      /* fall through to the offline cache */
+    }
+
+    if (!loaded) {
+      const cached = await historyCache.get(id);
+      if (cached && cached.messages.length) {
+        loaded = cached.messages;
+        setOfflineHistoryBanner(true);
+      }
+    }
+
+    setMessages(loaded ?? []);
+    setStreamedText('');
+    setStreamedReasoning('');
+    setScreen('chat');
+  }, [engine, historyCache, sessions]);
+
+  /** Attach a text/base64 file to the active session (best-effort). */
+  const attachTextFile = useCallback(async (name: string, content: string, mime?: string) => {
+    if (!engine || !currentSession) return;
+    if (engine.id === 'desktop') {
+      try {
+        await (engine as HermesEngine).attachFile?.(currentSession, {name, content, mime});
+      } catch { /* best-effort */ }
+    }
+  }, [engine, currentSession]);
+
+  const attachImageFile = useCallback(async (name: string, base64: string, mime?: string) => {
+    if (!engine || !currentSession) return;
+    if (engine.id === 'desktop') {
+      try {
+        await (engine as HermesEngine).attachImage?.(currentSession, {name, data: base64, mime});
+      } catch { /* best-effort */ }
+    }
+  }, [engine, currentSession]);
+
+  const addAttachment = useCallback((a: {kind: 'file' | 'image'; name: string; size?: number}) => {
+    setPendingAttachments(prev => [...prev, {...a, id: `${Date.now()}-${Math.random().toString(36).slice(2,8)}`}]);
+  }, []);
+  const removeAttachment = useCallback((id: string) => {
+    setPendingAttachments(prev => prev.filter(a => a.id !== id));
+  }, []);
+  const clearAttachments = useCallback(() => setPendingAttachments([]), []);
+
+  const setChatOptions = useCallback((opts: ChatOptions) => {
+    setChatOptionsState(opts);
+    void optsStore.save(opts);
+  }, [optsStore]);
+  const patchChatOption = useCallback(<K extends keyof ChatOptions>(key: K, value: ChatOptions[K]) => {
+    setChatOptionsState(prev => {
+      const next = {...prev, [key]: value};
+      void optsStore.save(next);
+      return next;
+    });
+  }, [optsStore]);
+
+  const pushRecentModel = useCallback(async (m: string) => {
+    await modelsStore.pushRecent(m);
+    setRecentModels(await modelsStore.getRecents());
+  }, [modelsStore]);
+  const toggleFavoriteModel = useCallback(async (m: string) => {
+    const now = await modelsStore.toggleFavorite(m);
+    setFavoriteModels(await modelsStore.getFavorites());
+    return now;
+  }, [modelsStore]);
+
+  const refreshCachedSessions = useCallback(async () => {
+    setCachedSessions(await sessionCache.load());
+  }, [sessionCache]);
+
+  const setActiveProfile = useCallback((id: string | null) => {
+    setActiveProfileState(id);
+    void kv.setItem(STORAGE_KEYS.activeProfile, id ?? '');
+  }, []);
+  const setActiveWorkspace = useCallback((path: string | null) => {
+    setActiveWorkspaceState(path);
+    void kv.setItem(STORAGE_KEYS.activeWorkspace, path ?? '');
+  }, []);
+
+  const refreshProjects = useCallback(async () => {
+    if (!engine || engine.id !== 'desktop') return;
+    try {
+      const r = await (engine as HermesEngine).listProjects?.();
+      if (r) {
+        setProjects(r.projects ?? []);
+        setActiveProjectId(r.active_id ?? null);
+      }
+    } catch {/* fine */}
+  }, [engine]);
+
+  const setActiveProject = useCallback(async (id: string | null) => {
+    setActiveProjectId(id);
+    if (engine && engine.id === 'desktop') {
+      try {
+        await (engine as HermesEngine).setActiveProject?.(id);
+      } catch {/* fine */}
+    }
+  }, [engine]);
 
   const abortStream = useCallback(() => {
     streamRef.current?.abort();
@@ -485,6 +748,8 @@ export function AppProvider({children}: {children: React.ReactNode}) {
     setStreaming,
     streamedText,
     setStreamedText,
+    streamedReasoning,
+    setStreamedReasoning,
     streamRef,
     sendPrompt,
     abortStream,
@@ -496,6 +761,32 @@ export function AppProvider({children}: {children: React.ReactNode}) {
     currentNoteId,
     setCurrentNoteId,
     offlineModeBanner,
+    offlineHistoryBanner,
+    chatOptions,
+    setChatOptions,
+    patchChatOption,
+    recentModels,
+    favoriteModels,
+    pushRecentModel,
+    toggleFavoriteModel,
+    cachedSessions,
+    refreshCachedSessions,
+    steerStream,
+    resumeSession,
+    attachTextFile,
+    attachImageFile,
+    pendingAttachments,
+    addAttachment,
+    removeAttachment,
+    clearAttachments,
+    activeProfile,
+    setActiveProfile,
+    activeWorkspace,
+    setActiveWorkspace,
+    projects,
+    activeProjectId,
+    refreshProjects,
+    setActiveProject,
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

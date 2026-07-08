@@ -161,6 +161,9 @@ describe('HermesClient (unit)', () => {
       password: 'p',
       fetchImpl: fetchMock,
       WebSocketImpl: WS,
+      // This test asserts on a raw close; keep the socket down so no
+      // background reconnect timer is scheduled.
+      autoReconnect: false,
     });
     const connectPromise = client.connect();
     await new Promise(r => setImmediate(r));
