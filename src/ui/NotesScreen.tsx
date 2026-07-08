@@ -9,7 +9,7 @@ import {ChevronRightIcon, RefreshIcon, PlusIcon, SearchIcon, TrashIcon} from './
 import {notesStore, NoteMeta} from '../api/notesStore';
 
 export default function NotesScreen() {
-  const {setScreen} = useApp();
+  const {setScreen, setCurrentNoteId} = useApp();
   const {palette, spacing, type} = useTheme();
   const [notes, setNotes] = useState<NoteMeta[]>([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -51,10 +51,13 @@ export default function NotesScreen() {
     try {
       const name = `Untitled ${new Date().toLocaleString()}`;
       const note = await notesStore.write(name, `# ${name}\n\n`);
-      setNotes(prev => [
-        {...note, modifiedTime: new Date(note.modifiedMs).toISOString()},
-        ...prev,
-      ]);
+      const meta: NoteMeta = {
+        ...note,
+        mimeType: 'text/markdown',
+        modifiedTime: new Date(note.modifiedMs).toISOString(),
+      } as NoteMeta;
+      setNotes(prev => [meta, ...prev]);
+      setCurrentNoteId(note.id);
       setScreen('noteEditor' as any);
     } catch (e: any) {
       Alert.alert('Could not create note', e?.message ?? String(e));
@@ -183,7 +186,7 @@ export default function NotesScreen() {
               </Text>
               <TouchableOpacity
                 style={{flex: 1}}
-                onPress={() => setScreen('noteEditor' as any)}
+                onPress={() => { setCurrentNoteId(n.id); setScreen('noteEditor' as any); }}
                 onLongPress={() => onDelete(n)}>
                 <Text style={[type.body, {fontWeight: '600', fontSize: 14}]} numberOfLines={1}>
                   {n.name}

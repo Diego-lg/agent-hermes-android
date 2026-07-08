@@ -24,13 +24,29 @@ function Shell() {
   const [notesReady, setNotesReady] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       try {
         await notesStore.loadConfig();
         const restored = await notesStore.restore();
-        setNotesReady(notesStore.hasConfig() && restored);
+        if (!cancelled) {
+          const ready = notesStore.hasConfig() && restored;
+          setNotesReady(ready);
+          // Re-check whenever we come back from Settings where the user might
+          // have just signed in to Drive.
+          if (!ready) {
+            setTimeout(async () => {
+              try {
+                await notesStore.loadConfig();
+                const r2 = await notesStore.restore();
+                if (!cancelled && notesStore.hasConfig() && r2) setNotesReady(true);
+              } catch {}
+            }, 1500);
+          }
+        }
       } catch { /* ignore */ }
     })();
+    return () => { cancelled = true; };
   }, [screen]);
 
   if (screen === 'login') {
@@ -42,7 +58,7 @@ function Shell() {
   return (
     <View style={{flex: 1, backgroundColor: theme.palette.bg}}>
       <StatusBar
-        barStyle={theme.palette.bg.startsWith('#0') || theme.palette.bg === '#000' ? 'light-content' : 'dark-content'}
+        barStyle={isDarkBg(theme.palette.bg) ? 'light-content' : 'dark-content'}
         backgroundColor={theme.palette.bg}
       />
       <View style={{flex: 1}}>
@@ -63,6 +79,28 @@ function Shell() {
       />
     </View>
   );
+}
+
+/** Decide light vs dark status-bar text from the theme's hex/rgb bg color. */
+function isDarkBg(bg: string): boolean {
+  // Pull out r/g/b from #rgb, #rrggbb, or rgb(...) string.
+  let m = bg.match(/^#([0-9a-f]{3})$/i);
+  let r = 255, g = 255, b = 255;
+  if (m) {
+    r = parseInt(m[1][0] + m[1][0], 16);
+    g = parseInt(m[1][1] + m[1][1], 16);
+    b = parseInt(m[1][2] + m[1][2], 16);
+  } else if ((m = bg.match(/^#([0-9a-f]{6})$/i))) {
+    r = parseInt(m[1].slice(0, 2), 16);
+    g = parseInt(m[1].slice(2, 4), 16);
+    b = parseInt(m[1].slice(4, 6), 16);
+  } else if ((m = bg.match(/rgba?\(([^)]+)\)/i))) {
+    const parts = m[1].split(',').map(s => parseFloat(s.trim()));
+    r = parts[0] || 0; g = parts[1] || 0; b = parts[2] || 0;
+  }
+  // Perceived brightness (Rec. 601).
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return lum < 0.55;
 }
 
 export default function App() {

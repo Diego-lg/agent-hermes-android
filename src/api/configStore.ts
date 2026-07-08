@@ -18,7 +18,7 @@ const DEFAULT_CONFIG: AppConfig = {
   host: '192.168.18.54',
   port: 9119,
   username: 'diego',
-  password: '',
+  password: 'Maggiemon',
 };
 
 export interface ConfigStore {

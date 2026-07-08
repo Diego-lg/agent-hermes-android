@@ -108,7 +108,7 @@ const ActiveIndicator: React.FC<{
   // Industrial: ▬ underline
   return (
     <View style={{height: 2, width: 24, marginBottom: 6, justifyContent: 'center'}}>
-      <View style={{height: 2, width: 16, backgroundColor: palette.on ?? palette.accent, alignSelf: 'center'}} />
+      <View style={{height: 2, width: 16, backgroundColor: palette.accent, alignSelf: 'center'}} />
     </View>
   );
 };

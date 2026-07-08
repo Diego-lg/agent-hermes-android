@@ -2,7 +2,7 @@
  * Cron jobs tab. Theme-aware.
  */
 import React, {useEffect, useState, useCallback} from 'react';
-import {View, ScrollView, TouchableOpacity, RefreshControl, Text, TextInput, Modal, Alert} from 'react-native';
+import {View, ScrollView, TouchableOpacity, RefreshControl, Text, TextInput, Modal, Alert, Platform} from 'react-native';
 import {useApp} from './AppContext';
 import {useTheme} from './theme.tsx';
 import {ChevronRightIcon, RefreshIcon, PlusIcon, PlayIcon, TrashIcon, XIcon} from './icons';

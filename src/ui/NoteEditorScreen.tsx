@@ -9,7 +9,7 @@ import {ChevronLeftIcon, RefreshIcon, BotIcon} from './icons';
 import {notesStore, NoteContent} from '../api/notesStore';
 
 export default function NoteEditorScreen() {
-  const {setScreen, client} = useApp();
+  const {setScreen, client, currentNoteId} = useApp();
   const {palette, spacing, type} = useTheme();
   const [note, setNote] = useState<NoteContent | null>(null);
   const [draft, setDraft] = useState('');
@@ -27,18 +27,20 @@ export default function NoteEditorScreen() {
     (async () => {
       try {
         if (!notesStore.isAuthorized()) { setScreen('settings'); return; }
-        const list = await notesStore.list();
-        if (list.length === 0) {
-          const n = await notesStore.write('Untitled', '# Untitled\n\n');
-          setNote(n); setName(n.name); setDraft(n.content);
-        } else {
-          const first = list[0];
-          const n = await notesStore.read(first.id);
-          setNote(n); setName(n.name); setDraft(n.content);
+        if (currentNoteId) {
+          try {
+            const n = await notesStore.read(currentNoteId);
+            setNote(n); setName(n.name); setDraft(n.content);
+            return;
+          } catch {
+            // note id no longer valid — fall through to fresh note
+          }
         }
+        const n = await notesStore.write('Untitled', '# Untitled\n\n');
+        setNote(n); setName(n.name); setDraft(n.content);
       } catch (e) { console.warn('editor init', e); }
     })();
-  }, [setScreen]);
+  }, [setScreen, currentNoteId]);
 
   useEffect(() => {
     if (!note) return;

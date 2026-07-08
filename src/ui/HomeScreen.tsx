@@ -184,7 +184,7 @@ export default function HomeScreen() {
                 setCurrentSession(s.id);
                 try {
                   const h = await client.loadHistory(s.id);
-                  setMessages(h.map((m: any) => ({role: m.role, text: m.content, ts: m.ts})));
+                  setMessages(h.map((m: any) => ({role: m.role, text: m.text ?? m.content ?? '', ts: m.ts ?? Date.now()})));
                 } catch { setMessages([]); }
                 setScreen('chat');
               }}

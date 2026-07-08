@@ -52,6 +52,9 @@ export interface AppState {
   // Active agent for the current session (if any)
   currentAgent: AgentDef | null;
   setCurrentAgent: (a: AgentDef | null) => void;
+  // Selected note in the editor (null = new note)
+  currentNoteId: string | null;
+  setCurrentNoteId: (id: string | null) => void;
 }
 
 const Ctx = createContext<AppState | null>(null);
@@ -80,6 +83,7 @@ export function AppProvider({children}: {children: React.ReactNode}) {
 
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [currentAgent, setCurrentAgent] = useState<AgentDef | null>(null);
+  const [currentNoteId, setCurrentNoteId] = useState<string | null>(null);
 
   // Load config + cached state on mount.
   useEffect(() => {
@@ -177,9 +181,7 @@ export function AppProvider({children}: {children: React.ReactNode}) {
     async (agentId?: string): Promise<string> => {
       if (!client) throw new Error('Not connected');
       const agent = agentId ? agentById(agentId) ?? null : null;
-      const title = agent
-        ? `${agent.icon} ${agent.name}`
-        : 'Quick Chat';
+      const title = agent ? agent.name : 'Quick Chat';
       const sid = await client.createSession(title);
       setCurrentSession(sid);
       setCurrentAgent(agent);
@@ -282,6 +284,8 @@ export function AppProvider({children}: {children: React.ReactNode}) {
     refreshSessions,
     currentAgent,
     setCurrentAgent,
+    currentNoteId,
+    setCurrentNoteId,
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

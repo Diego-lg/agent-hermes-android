@@ -7,8 +7,7 @@
     "resolveJsonModule": true,
     "jsx": "react-native",
     "lib": ["es2022", "dom"],
-    "types": ["react-native", "jest", "node"],
-    "moduleResolution": "node"
+    "types": ["react-native", "jest", "node"]
   },
   "include": ["src/**/*", "index.js", "App.tsx", "*.ts", "*.tsx", "__tests__/**/*"]
 }

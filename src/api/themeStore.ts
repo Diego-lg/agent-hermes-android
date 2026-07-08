@@ -5,13 +5,15 @@
  * Updated in real time by Settings → Appearance.
  */
 import {kv, STORAGE_KEYS} from './storage';
-import {Theme, ThemeId, DEFAULT_THEME, getTheme} from '../ui/theme';
+import {Theme, ThemeId, DEFAULT_THEME, getTheme, THEMES} from '../ui/theme';
 
 export const themeStore = {
   async load(): Promise<ThemeId> {
     const raw = await kv.getItem(STORAGE_KEYS.theme);
     if (!raw) return DEFAULT_THEME;
-    return (raw as ThemeId) || DEFAULT_THEME;
+    // Validate against the registry — anything else falls back to default.
+    const valid = Object.keys(THEMES).includes(raw);
+    return (valid ? raw : DEFAULT_THEME) as ThemeId;
   },
   async save(id: ThemeId): Promise<void> {
     await kv.setItem(STORAGE_KEYS.theme, id);
