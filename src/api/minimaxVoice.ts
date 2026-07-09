@@ -377,3 +377,78 @@ export async function cloneVoice(creds: MinimaxCreds, p: CloneParams): Promise<V
     return {ok: false, error: e?.message ?? String(e)};
   }
 }
+
+
+/* -------------------------------------------------------------------------- */
+/* Voice catalog — list EVERY available voice                                 */
+/* -------------------------------------------------------------------------- */
+
+export interface VoiceInfo {
+  voiceId: string;
+  name: string;
+  description?: string;
+  category: 'system' | 'cloned' | 'generated';
+  lang?: string;
+}
+
+/** Best-effort language from a system voice_id prefix, e.g.
+ *  "English_...", "Chinese (Mandarin)_...", "Japanese_...". */
+function guessVoiceLang(voiceId: string): string | undefined {
+  const m = /^([A-Za-z][A-Za-z ()]*?)_/.exec(voiceId);
+  return m ? m[1].trim() : undefined;
+}
+
+/** List ALL voices available to the account in one call: system voices (300+),
+ *  cloned voices, and generated (voice-design) voices. MiniMax's get_voice
+ *  returns the complete set for the requested voice_type (no pagination). */
+export async function listVoices(
+  creds: MinimaxCreds,
+  voiceType: 'all' | 'system' | 'voice_cloning' | 'voice_generation' = 'all',
+): Promise<VoiceResult<{voices: VoiceInfo[]}>> {
+  if (!creds.apiKey) return {ok: false, error: 'MiniMax API key not set.'};
+  const url = withGroup(`${trimBase(creds.baseUrl)}/get_voice`, creds.groupId);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 30000);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: authHeaders(creds),
+      signal: ctrl.signal,
+      body: JSON.stringify({voice_type: voiceType}),
+    });
+    if (!res.ok) return {ok: false, error: await readError(res), code: res.status};
+    const j: any = await res.json();
+    const code = j?.base_resp?.status_code;
+    if (code && code !== 0) {
+      return {ok: false, error: `MiniMax ${code}: ${j?.base_resp?.status_msg ?? 'get_voice error'}`, code};
+    }
+    const voices: VoiceInfo[] = [];
+    const seen = new Set<string>();
+    const take = (arr: any, category: VoiceInfo['category']) => {
+      if (!Array.isArray(arr)) return;
+      for (const v of arr) {
+        const id = v?.voice_id;
+        if (typeof id !== 'string' || !id || seen.has(id)) continue;
+        seen.add(id);
+        const desc = Array.isArray(v?.description)
+          ? v.description.filter(Boolean).join(' ')
+          : (typeof v?.description === 'string' ? v.description : undefined);
+        voices.push({
+          voiceId: id,
+          name: (typeof v?.voice_name === 'string' && v.voice_name) || id,
+          description: desc || undefined,
+          category,
+          lang: category === 'system' ? guessVoiceLang(id) : undefined,
+        });
+      }
+    };
+    take(j?.system_voice, 'system');
+    take(j?.voice_cloning, 'cloned');
+    take(j?.voice_generation, 'generated');
+    return {ok: true, voices};
+  } catch (e: any) {
+    return {ok: false, error: e?.name === 'AbortError' ? 'Voice list request timed out.' : (e?.message ?? String(e))};
+  } finally {
+    clearTimeout(timer);
+  }
+}

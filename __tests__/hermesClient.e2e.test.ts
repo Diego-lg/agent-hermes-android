@@ -120,4 +120,30 @@ describe('HermesClient (live e2e)', () => {
     expect(list.length).toBeGreaterThan(0);
     client.disconnect();
   });
+
+  // The Android app now seeds LAN credentials on first launch and
+  // persists them, so subsequent cold starts open straight into the
+  // chat with no "login wall". Here we exercise the underlying
+  // property: a freshly-built HermesClient with the SAME persisted
+  // config can reconnect after disconnect and immediately run an RPC,
+  // mirroring what happens on every cold start of the app.
+  it('reconnect with persisted creds runs an RPC immediately after disconnect', async () => {
+    if (!serverUp) return;
+    const persisted = {host: HOST, port: PORT, username: USER, password: PASS};
+    const first = new HermesClient(persisted);
+    await first.connect();
+    await first.createSession('e2e reconnect');
+    first.disconnect();
+    expect(first.isConnected()).toBe(false);
+
+    const second = new HermesClient(persisted);
+    await second.connect();
+    expect(second.isConnected()).toBe(true);
+    // Any RPC should work — we use listSessions which the server always
+    // supports and which doesn't depend on which session IDs the user
+    // happened to create.
+    const list = await second.listSessions(1);
+    expect(Array.isArray(list)).toBe(true);
+    second.disconnect();
+  });
 });

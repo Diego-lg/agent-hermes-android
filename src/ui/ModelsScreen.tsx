@@ -777,9 +777,27 @@ function timeAgo(ts: number): string {
 const VoiceModelsSection: React.FC<{monoFont?: any}> = ({monoFont}) => {
   const {palette, spacing, type} = useTheme();
   const voice = useVoice();
-  const {settings, ready, patch, speak, stopSpeaking, speaking, audioAvailable, lastError} = voice;
+  const {settings, ready, patch, speak, stopSpeaking, speaking, audioAvailable, lastError,
+    allVoices, voicesLoading, voicesError, refreshVoices} = voice;
+  const [browserOpen, setBrowserOpen] = useState(false);
+  const [voiceQuery, setVoiceQuery] = useState('');
 
   const clampSpeed = (v: number) => Math.max(0.5, Math.min(2, Math.round(v * 10) / 10));
+
+  const TOO_MANY = 14;
+  const systemChips = useMemo(
+    () => allVoices.filter(v => v.category === 'system' || v.category === 'generated'),
+    [allVoices],
+  );
+  const filteredVoices = useMemo(() => {
+    const q = voiceQuery.trim().toLowerCase();
+    if (!q) return systemChips;
+    return systemChips.filter(v =>
+      v.voiceId.toLowerCase().includes(q) ||
+      v.name.toLowerCase().includes(q) ||
+      (v.lang ?? '').toLowerCase().includes(q) ||
+      (v.description ?? '').toLowerCase().includes(q));
+  }, [systemChips, voiceQuery]);
 
   return (
     <View style={{paddingTop: spacing.lg}}>
@@ -825,11 +843,27 @@ const VoiceModelsSection: React.FC<{monoFont?: any}> = ({monoFont}) => {
             {SPEECH_MODELS.find(m => m.id === settings.speechModel)?.note}
           </Text>
 
-          {/* Voice: cloned voices first, then system voices */}
-          <Text style={[type.label, {color: palette.textMuted, marginTop: 12, marginBottom: 6}]}>VOICE</Text>
+          {/* Voice: header + fetch-all-voices */}
+          <View style={{flexDirection: 'row', alignItems: 'center', marginTop: 12, marginBottom: 6}}>
+            <Text style={[type.label, {color: palette.textMuted, flex: 1}]}>VOICE</Text>
+            <TouchableOpacity
+              onPress={() => void refreshVoices()}
+              disabled={voicesLoading}
+              hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}
+              style={{flexDirection: 'row', alignItems: 'center', gap: 5}}>
+              <RefreshIcon size={12} color={voicesLoading ? palette.textDim : palette.accent} />
+              <Text style={[type.mono, {color: voicesLoading ? palette.textDim : palette.accent, fontSize: 9, fontFamily: monoFont}]}>
+                {voicesLoading ? 'FETCHING…' : (systemChips.length ? `REFRESH (${systemChips.length})` : 'FETCH ALL VOICES')}
+              </Text>
+            </TouchableOpacity>
+          </View>
+          {voicesError ? (
+            <Text style={[type.monoMuted, {color: palette.error, fontSize: 10, marginBottom: 6, fontFamily: monoFont}]}>{voicesError}</Text>
+          ) : null}
+
           <View style={{flexDirection: 'row', flexWrap: 'wrap', gap: 6}}>
             {settings.clones.map(c => {
-              const active = settings.voiceId === c.voiceId;
+              const active = settings.voiceId === c.voiceId && settings.useClonedVoice;
               return (
                 <TouchableOpacity
                   key={c.voiceId}
@@ -848,25 +882,55 @@ const VoiceModelsSection: React.FC<{monoFont?: any}> = ({monoFont}) => {
                 </TouchableOpacity>
               );
             })}
-            {SYSTEM_VOICES.map(v => {
-              const active = settings.voiceId === v.id;
-              return (
-                <TouchableOpacity
-                  key={v.id}
-                  onPress={() => { patch('voiceId', v.id); patch('useClonedVoice', false); }}
-                  style={{
-                    paddingHorizontal: 12, paddingVertical: 8,
-                    borderWidth: 1,
-                    borderColor: active ? palette.accent : palette.border,
-                    backgroundColor: active ? (palette.accentMuted ?? palette.surfaceAlt) : 'transparent',
-                  }}>
-                  <Text style={[type.mono, {color: active ? palette.accent : palette.textDim, fontSize: 11, fontFamily: monoFont}]}>
-                    {v.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
+
+            {systemChips.length > TOO_MANY ? (
+              <TouchableOpacity
+                onPress={() => setBrowserOpen(true)}
+                style={{
+                  flexDirection: 'row', alignItems: 'center', gap: 6,
+                  paddingHorizontal: 12, paddingVertical: 8,
+                  borderWidth: 1, borderColor: palette.accent,
+                  backgroundColor: palette.accentMuted ?? palette.surfaceAlt,
+                }}>
+                <Volume2Icon size={12} color={palette.accent} />
+                <Text style={[type.mono, {color: palette.accent, fontSize: 11, fontFamily: monoFont}]}>
+                  BROWSE ALL ({systemChips.length}) →
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              (systemChips.length
+                ? systemChips
+                : SYSTEM_VOICES.map(v => ({voiceId: v.id, name: v.label, category: 'system' as const, description: undefined, lang: v.lang}))
+              ).map(v => {
+                const active = settings.voiceId === v.voiceId && !settings.useClonedVoice;
+                return (
+                  <TouchableOpacity
+                    key={v.voiceId}
+                    onPress={() => { patch('voiceId', v.voiceId); patch('useClonedVoice', false); }}
+                    style={{
+                      paddingHorizontal: 12, paddingVertical: 8,
+                      borderWidth: 1,
+                      borderColor: active ? palette.accent : palette.border,
+                      backgroundColor: active ? (palette.accentMuted ?? palette.surfaceAlt) : 'transparent',
+                    }}>
+                    <Text style={[type.mono, {color: active ? palette.accent : palette.textDim, fontSize: 11, fontFamily: monoFont}]}>
+                      {v.name}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })
+            )}
           </View>
+          {systemChips.length > TOO_MANY && !settings.useClonedVoice ? (
+            <Text style={[type.monoMuted, {color: palette.textDim, fontSize: 10, marginTop: 6, fontFamily: monoFont}]} numberOfLines={1}>
+              selected: {settings.voiceId}
+            </Text>
+          ) : null}
+          {!systemChips.length ? (
+            <Text style={[type.monoMuted, {color: palette.textGhost, fontSize: 9, marginTop: 6, fontFamily: monoFont}]}>
+              Showing a starter set — tap FETCH ALL VOICES to load the full MiniMax catalog (300+).
+            </Text>
+          ) : null}
 
           {/* Prosody: speed stepper + emotion chips */}
           <Text style={[type.label, {color: palette.textMuted, marginTop: 12, marginBottom: 6}]}>
@@ -943,6 +1007,75 @@ const VoiceModelsSection: React.FC<{monoFont?: any}> = ({monoFont}) => {
           ) : null}
         </View>
       )}
+
+      {/* Full voice catalog — searchable popup (shown when there are many) */}
+      <Modal visible={browserOpen} animationType="slide" transparent onRequestClose={() => setBrowserOpen(false)}>
+        <View style={{flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end'}}>
+          <View style={{backgroundColor: palette.bg, borderTopWidth: 1, borderColor: palette.border, maxHeight: '85%', paddingTop: spacing.lg}}>
+            <View style={{flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, marginBottom: spacing.md}}>
+              <Volume2Icon size={16} color={palette.accent} />
+              <Text style={[type.h2, {flex: 1, marginLeft: 8, fontSize: 13, letterSpacing: 0.5}]}>
+                ALL VOICES · {settings.speechModel}
+              </Text>
+              <TouchableOpacity onPress={() => setBrowserOpen(false)} style={{padding: 6}}>
+                <XIcon size={18} color={palette.textDim} />
+              </TouchableOpacity>
+            </View>
+            <View style={{paddingHorizontal: spacing.lg, marginBottom: spacing.sm}}>
+              <TextInput
+                value={voiceQuery}
+                onChangeText={setVoiceQuery}
+                placeholder={`Search ${systemChips.length} voices — name or language…`}
+                placeholderTextColor={palette.textGhost}
+                autoCorrect={false}
+                style={{
+                  color: palette.text, fontSize: 14, paddingVertical: 10, paddingHorizontal: 12,
+                  backgroundColor: palette.surfaceAlt, borderWidth: 1, borderColor: palette.border,
+                  fontFamily: monoFont,
+                }}
+              />
+              <Text style={[type.monoMuted, {color: palette.textGhost, fontSize: 9, marginTop: 4, fontFamily: monoFont}]}>
+                {filteredVoices.length} of {systemChips.length} · MiniMax system voices work across all speech models
+              </Text>
+            </View>
+            <ScrollView keyboardShouldPersistTaps="handled" style={{paddingHorizontal: spacing.lg}} contentContainerStyle={{paddingBottom: 28}}>
+              {filteredVoices.length === 0 ? (
+                <Text style={[type.bodyMuted, {color: palette.textDim, fontSize: 12, paddingVertical: 16, textAlign: 'center'}]}>
+                  No voices match “{voiceQuery}”.
+                </Text>
+              ) : filteredVoices.map(v => {
+                const active = settings.voiceId === v.voiceId && !settings.useClonedVoice;
+                return (
+                  <TouchableOpacity
+                    key={v.voiceId}
+                    onPress={() => { patch('voiceId', v.voiceId); patch('useClonedVoice', false); setBrowserOpen(false); }}
+                    style={{
+                      flexDirection: 'row', alignItems: 'center',
+                      paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: palette.border,
+                    }}>
+                    <View style={{flex: 1, paddingRight: 10}}>
+                      <Text style={[type.body, {color: active ? palette.accent : palette.text, fontSize: 13}]}>
+                        {v.name}
+                        {v.lang ? <Text style={[type.monoMuted, {color: palette.textDim, fontSize: 10}]}>{'  · ' + v.lang}</Text> : null}
+                        {v.category === 'generated' ? <Text style={[type.monoMuted, {color: palette.highlight, fontSize: 10}]}>{'  · designed'}</Text> : null}
+                      </Text>
+                      <Text style={[type.monoMuted, {color: palette.textGhost, fontSize: 9, marginTop: 2, fontFamily: monoFont}]} numberOfLines={1}>
+                        {v.voiceId}
+                      </Text>
+                      {v.description ? (
+                        <Text style={[type.bodyMuted, {color: palette.textDim, fontSize: 11, marginTop: 2}]} numberOfLines={2}>
+                          {v.description}
+                        </Text>
+                      ) : null}
+                    </View>
+                    {active ? <CheckIcon size={14} color={palette.accent} /> : <ChevronRightIcon size={14} color={palette.textDim} />}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };

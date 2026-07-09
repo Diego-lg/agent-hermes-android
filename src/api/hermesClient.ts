@@ -1,27 +1,38 @@
 /**
- * HermesClient — talks to a `hermes serve` instance over HTTP + WebSocket.
+ * HermesClientConfig — what the desktop engine needs to talk to a
+ * `hermes serve` instance over HTTP + WebSocket.
  *
- * The wire dance:
- *   1. POST /auth/password-login      → cookies
- *   2. POST /api/auth/ws-ticket        → single-use ticket (30s TTL)
- *   3. WS  /api/ws?ticket=…            → JSON-RPC 2.0 stream
+ * The wire dance (no auth wall by default):
+ *   1. (Optional) POST /auth/password-login  → cookies
+ *   2.           POST /api/auth/ws-ticket    → single-use ticket (30s TTL)
+ *   3.           WS   /api/ws?ticket=…       → JSON-RPC 2.0 stream
  *   4. Subscribe to server-pushed events (message.delta, message.complete, ...)
- *   5. Send prompt.submit; collect deltas until message.complete
+ *   5. Send prompt.submit; collect deltas until message.complete.
  *
- * Cookie storage is in-memory only (the Android app uses AsyncStorage in
- * a real build; in tests we accept the trade-off). A real mobile client
- * would also persist the username/password via the platform keychain.
+ * Step 1 is skipped when `password` is empty — that's the default for the
+ * Android client now (no login screen). The desktop server's loopback /
+ * `--insecure` mode serves /api/auth/ws-ticket directly without a
+ * session cookie, so the phone boots straight into the app.
  *
- * This module is framework-agnostic: it works in RN (uses global WebSocket
- * + fetch), in Node tests (uses the `ws` package + node-fetch polyfill),
- * and in a future Electron / iOS / web build with no changes.
+ * Cookie storage is in-memory only (a real release would persist them via
+ * AsyncStorage + Android Keystore). This module is framework-agnostic: it
+ * works in RN, in Node tests, and in any future iOS / Electron / web build.
  */
 
 export interface HermesClientConfig {
   host: string;        // e.g. "192.168.18.54"
   port: number;        // e.g. 9119
-  username: string;
-  password: string;
+  /**
+   * Username for the basic-auth provider. Optional — only used when
+   * `password` is also set. Leave empty for passwordless / loopback mode.
+   */
+  username?: string;
+  /**
+   * Basic-auth password. Empty string (default) means: skip the
+   * `/auth/password-login` step and go straight to ws-ticket. The phone
+   * never needs a password for the user's LAN server.
+   */
+  password?: string;
   /** Override fetch for tests. */
   fetchImpl?: typeof fetch;
   /** Override WebSocket constructor for tests. */
@@ -51,6 +62,9 @@ export interface ChatMessage {
     calls?: number;
   };
   ts: number;
+  /** Media attached to (user) or produced by (assistant) this message, for
+   *  inline rendering. Images carry a data: URI or http URL. */
+  attachments?: Array<{kind: 'image' | 'file'; name: string; dataUri?: string; mime?: string}>;
 }
 
 export interface StreamHandle {
@@ -75,6 +89,9 @@ export interface PromptOptions {
   profile?: string;
   /** Optional project id (organisational grouping). */
   projectId?: string;
+  /** Files/images to send with this turn (cloud engine builds multimodal
+   *  content; the desktop engine attaches them out-of-band instead). */
+  attachments?: Array<{kind: 'file' | 'image'; name: string; dataUri?: string; content?: string; mime?: string}>;
 }
 
 /** Lightweight summary record for the Sessions tab. */
@@ -132,7 +149,7 @@ export class HermesClient {
     return () => this.eventHandlers.delete(handler);
   }
 
-  /** Three-step auth + WS upgrade. Idempotent. */
+  /** Three-step (or two-step in passwordless mode) auth + WS upgrade. Idempotent. */
   async connect(): Promise<void> {
     if (this.isConnected()) return;
     // A fresh connect() cancels any in-flight reconnect and clears the
@@ -140,12 +157,23 @@ export class HermesClient {
     this.cancelReconnect();
     this.closed = false;
 
-    await this.login();               // Step 1: password login → cookies
+    // Skip the password-login step when no password is configured. The
+    // desktop server in loopback / `--insecure` mode serves the
+    // ws-ticket endpoint without a session cookie, so the phone can
+    // boot directly into the chat — no login wall.
+    if (this.cfg.password) {
+      await this.login();
+    }
     await this.mintTicketAndOpen();   // Step 2+3: ws-ticket → WS upgrade
 
     this.connectedOnce = true;
     this.reconnectAttempts = 0;
     this.reconnecting = false;
+  }
+
+  /** True iff this client was configured with a password (basic-auth). */
+  hasPassword(): boolean {
+    return !!this.cfg.password;
   }
 
   /* ----- auth steps (shared by connect() and reconnect) ----- */
@@ -202,15 +230,16 @@ export class HermesClient {
   /**
    * Re-establish a dropped connection. Tries to reuse the still-valid
    * session cookie (mint a fresh ticket only). If the ticket mint is
-   * rejected (401/403 — the session expired), re-runs password login once
-   * and retries. The server-side session id is preserved on `this.sessionId`,
-   * so the resumed socket picks up the same conversation.
+   * rejected (401/403 — the session expired), re-runs password login
+   * (only if a password is configured) and retries. The server-side
+   * session id is preserved on `this.sessionId`, so the resumed socket
+   * picks up the same conversation.
    */
   private async reestablish(): Promise<void> {
     try {
       await this.mintTicketAndOpen();
     } catch (e) {
-      if (e instanceof HermesError && (e.code === 401 || e.code === 403)) {
+      if (e instanceof HermesError && (e.code === 401 || e.code === 403) && this.cfg.password) {
         await this.login();
         await this.mintTicketAndOpen();
       } else {

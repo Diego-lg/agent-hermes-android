@@ -67,4 +67,10 @@ export const STORAGE_KEYS = {
   providerConfigs: 'hermes.providerConfigs',
   // MiniMax voice assistant settings (TTS model, voice, cloned voice, etc.)
   voiceSettings: 'hermes.voiceSettings',
+  // Group Chat: user-created/cloned personalities (built-ins live in code)
+  personalities: 'hermes.personalities',
+  // Group Chat: saved group configurations (rosters, mode, voice toggle)
+  groups: 'hermes.groups',
+  // LAN discovery cache (last-scan results)
+  discoveredHosts: 'hermes.discoveredHosts',
 } as const;

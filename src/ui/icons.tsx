@@ -580,3 +580,62 @@ export const SparklesIcon = make(
     <Path d="M19 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z" />
   </>,
 );
+
+/* ---------- Group chat ---------- */
+
+export const UsersIcon = make(
+  <>
+    <Path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+    <Circle cx="9" cy="7" r="4" />
+    <Path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+    <Path d="M16 3.13a4 4 0 0 1 0 7.75" />
+  </>,
+);
+
+export const AtSignIcon = make(
+  <>
+    <Circle cx="12" cy="12" r="4" />
+    <Path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94" />
+  </>,
+);
+
+/* ---------- Persona icon registry ----------
+ * Persisted personalities store `icon` as a string key; resolve it to a
+ * component here. Every key maps to an icon already defined above. New custom
+ * personalities pick from PERSONA_ICON_KEYS in the creator. */
+export const PERSONA_ICONS: Record<string, React.FC<IconProps>> = {
+  sparkles: SparklesIcon,
+  eye: EyeIcon,
+  compass: CompassIcon,
+  check: CheckIcon,
+  zap: ZapIcon,
+  message: MessageIcon,
+  refresh: RefreshIcon,
+  layers: LayersIcon,
+  'bar-chart': BarChartIcon,
+  'shield-check': ShieldCheckIcon,
+  'file-text': FileTextIcon,
+  pen: PenIcon,
+  'chart-bar': ChartBarIcon,
+  cpu: CpuIcon,
+  search: SearchIcon,
+  clock: ClockIcon,
+  image: ImageIcon,
+  database: DatabaseIcon,
+  user: UserIcon,
+  shield: ShieldIcon,
+  bot: BotIcon,
+  star: StarIcon,
+  globe: GlobeIcon,
+  lightbulb: LightbulbIcon,
+  code: CodeIcon,
+  terminal: TerminalIcon,
+  users: UsersIcon,
+};
+
+export const PERSONA_ICON_KEYS: string[] = Object.keys(PERSONA_ICONS);
+
+/** Resolve a persona icon key to a component, defaulting to the bot glyph. */
+export function personaIcon(key?: string): React.FC<IconProps> {
+  return (key && PERSONA_ICONS[key]) || BotIcon;
+}

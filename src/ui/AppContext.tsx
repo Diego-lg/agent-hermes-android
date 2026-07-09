@@ -11,6 +11,11 @@
  *     minimax engine so the app keeps working when the server is down.
  *   - Switching is automatic on connect, and reflected in the UI (HomeScreen
  *     status row, ChatScreen header). User can pin from Settings.
+ *
+ * No-login-wall: the phone boots straight into the Home screen and tries
+ * to connect in passwordless mode. The desktop Hermes server in loopback /
+ * `--insecure` mode serves `/api/auth/ws-ticket` directly without a
+ * session cookie, so this works without prompting for credentials.
  */
 import React, {createContext, useContext, useState, useEffect, useCallback, useMemo} from 'react';
 import {HermesClient, ChatMessage, StreamHandle, HermesError, SessionSummary, PromptOptions} from '../api/hermesClient';
@@ -29,9 +34,10 @@ import {ProviderConfig, ProviderConfigsStore, makeProviderConfigsStore, buildSee
 import {fetchProviderModels, PROVIDER_CATALOG} from '../api/providersCatalog';
 
 export type Screen =
-  | 'home' | 'chat' | 'agents' | 'settings' | 'profile' | 'login'
+  | 'home' | 'chat' | 'agents' | 'settings' | 'profile'
   | 'notes' | 'noteEditor' | 'cron'
   | 'sessions' | 'models' | 'profiles' | 'tasks' | 'skills' | 'workspace' | 'memory' | 'insights'
+  | 'groupChat' | 'personalities'
   | 'yolo';
 
 export interface SessionInfo {
@@ -66,6 +72,9 @@ export interface AppState {
   /** Chat */
   currentSession: string | null;
   setCurrentSession: (id: string | null) => void;
+  /** Display title for the active session (auto-generated after 1st turn). */
+  currentSessionTitle: string | null;
+  setCurrentSessionTitle: (t: string | null) => void;
   messages: ChatMessage[];
   setMessages: (m: ChatMessage[]) => void;
   appendMessage: (m: ChatMessage) => void;
@@ -95,6 +104,9 @@ export interface AppState {
    *  (server unreachable) rather than fetched live — the UI can show a
    *  "cached / read-only" marker. */
   offlineHistoryBanner: boolean;
+  /** Force a fresh connect (used by Home's retry button when
+   *  connectionError is set, and to recover from a stale engine). */
+  retryConnect: () => Promise<void>;
   /** Per-turn chat options (model id, reasoning, workspace, profile, agent). */
   chatOptions: ChatOptions;
   setChatOptions: (opts: ChatOptions) => void;
@@ -111,8 +123,10 @@ export interface AppState {
   steerStream: (text: string) => void;
   /** Resume a past session — sets currentSession, loads history. */
   resumeSession: (id: string) => Promise<void>;
-  /** Attach a file (text) to the current session. Best-effort. */
-  attachTextFile: (name: string, content: string, mime?: string) => Promise<void>;
+  /** Attach a file (text) to the current session. Best-effort. `base64Data`,
+   *  when present, is forwarded as raw bytes to the server-side attachFile
+   *  RPC for non-text attachments (PDFs, images, etc). */
+  attachTextFile: (name: string, content: string, mime?: string, base64Data?: string) => Promise<void>;
   /** Attach an image (base64) to the current session. Best-effort. */
   attachImageFile: (name: string, base64: string, mime?: string) => Promise<void>;
   /** Currently-queued attachments (cleared after a successful submit). */
@@ -164,15 +178,15 @@ export function AppProvider({children}: {children: React.ReactNode}) {
   const providerConfigsStore = useMemo(() => makeProviderConfigsStore(), []);
   const historyCache = useMemo(() => makeSessionHistoryCacheStore(), []);
   // Start with the hardcoded default so the UI can render immediately
-  // (LoginScreen, etc.). The real saved config is loaded async in the
-  // effect below and replaces it. We do NOT use a "loading" gate here
-  // because the user-visible default is correct enough to show the
-  // login screen — the saved values get swapped in once they're ready.
+  // (HomeScreen, etc.). The real saved config is loaded async in the
+  // effect below and replaces it. There's no login wall anymore — the
+  // phone boots into home, and the `connect()` effect below tries the
+  // desktop in passwordless mode.
   const [config, setConfigState] = useState<AppConfig>({
     host: '192.168.18.54',
     port: 9119,
-    username: 'diego',
-    password: 'Maggiemon',
+    username: '',
+    password: '',
     modelBaseUrl: 'https://api.minimax.io/v1',
     modelId: 'MiniMax-Text-01',
     engineMode: 'auto',
@@ -185,43 +199,77 @@ export function AppProvider({children}: {children: React.ReactNode}) {
   const [serverOnline, setServerOnline] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
-  const [screen, setScreen] = useState<Screen>('login');
+  // Boot straight into the Home screen — no login wall. The connect
+  // effect below tries to reach the desktop server in the background.
+  const [screen, setScreen] = useState<Screen>('home');
 
   // Load the saved config on mount. Without this, the app would
   // re-render with the hardcoded default on every cold start, losing
   // the API key, GroupId, model id, host, port, etc. that the user
-  // configured last time.
+  // configured last time. Once the saved (or default) config is in
+  // place, kick off the engine connect.
+  //
+  // Seed-credentials bootstrap: a fresh install has no saved creds
+  // (username/password empty), which means the desktop server — which
+  // does require basic-auth even on loopback — won't let us in. To
+  // preserve the "boot straight into the app, no login wall" UX on
+  // this server, if the saved config has empty auth AND no prior
+  // server creds, we fill in the LAN-default username/password the
+  // first time around and persist that. After that one bootstrap the
+  // user is free to clear auth in Settings → Connection.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const saved = await store.load();
         if (cancelled) return;
-        // Only override state with the saved config if it actually has
-        // anything the user set. We treat an empty record (no fields
-        // beyond the defaults) as "no save", to keep the seed defaults
-        // for first-time installs.
+        // Anything the user has customised at any point — even just
+        // toggling a YOLO row or changing the model id — is "user data".
         const hasUserData =
           (saved.modelApiKey && saved.modelApiKey.length > 0) ||
           (saved.modelGroupId && saved.modelGroupId.length > 0) ||
+          (saved.username && saved.username.length > 0) ||
+          (saved.password && saved.password.length > 0) ||
           saved.host !== '192.168.18.54' ||
           saved.port !== 9119 ||
-          saved.username !== 'diego' ||
-          saved.password !== 'Maggiemon' ||
           (saved.modelBaseUrl && saved.modelBaseUrl !== 'https://api.minimax.io/v1') ||
           (saved.modelId && saved.modelId !== 'MiniMax-Text-01') ||
           (saved.engineMode && saved.engineMode !== 'auto');
         if (hasUserData) {
           setConfigState(saved);
+        } else if (!saved.password) {
+          // One-shot bootstrap: fill in the user's preferred LAN creds
+          // the first time so the desktop server lets us straight in.
+          // We do this only on a TRUE first launch (no user data at
+          // all), so the user can still clear auth later by editing
+          // it to empty via Settings → Auth.
+          const seeded: AppConfig = {
+            ...saved,
+            username: 'diego',
+            password: 'Maggiemon',
+          };
+          setConfigState(seeded);
+          await store.save(seeded);
         }
       } catch {
         // Storage failure (rare). Stay on the hardcoded defaults.
       } finally {
         if (!cancelled) setConfigLoaded(true);
+        // One-shot notifee bootstrap. Idempotent — does nothing if the
+        // native module isn't linked (returns `available: false`), and is
+        // safe to fire on every cold start since createChannel is a no-op
+        // on existing channel ids and the runtime permission request is
+        // suppressed by the OS on subsequent launches.
+        try {
+          const {ensureNotificationSetup} = await import('../api/notifications');
+          await ensureNotificationSetup();
+        } catch { /* notifs are optional, never break boot */ }
       }
+      // The connect itself is kicked off by the `bootConnectedRef` effect
+      // below, which runs after `doConnect` is in scope.
     })();
     return () => { cancelled = true; };
-  }, [store]);
+  }, []);
 
   // Load persisted chat options, recents/favorites, cached sessions, profile, workspace.
   useEffect(() => {
@@ -264,11 +312,16 @@ export function AppProvider({children}: {children: React.ReactNode}) {
   }, [optsStore, modelsStore, sessionCache, providerConfigsStore, config.modelApiKey, config.modelBaseUrl, config.modelGroupId]);
 
   const [currentSession, setCurrentSession] = useState<string | null>(null);
+  const [currentSessionTitle, setCurrentSessionTitle] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [streamedText, setStreamedText] = useState('');
   const [streamedReasoning, setStreamedReasoning] = useState('');
   const streamRef = useMemo(() => ({current: null as StreamHandle | null}), []);
+  // Stable ref that always points at the most recently built engine. Used
+  // by callbacks like openOrCreateSession that need to read the latest
+  // engine inside an async callback without rebinding on every render.
+  const engineRef = useMemo(() => ({current: null as ChatEngine | null}), []);
 
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [currentAgent, setCurrentAgent] = useState<AgentDef | null>(null);
@@ -285,6 +338,10 @@ export function AppProvider({children}: {children: React.ReactNode}) {
   const [favoriteModels, setFavoriteModels] = useState<string[]>([]);
   const [cachedSessions, setCachedSessions] = useState<SessionSummary[]>([]);
   const [pendingAttachments, setPendingAttachments] = useState<Array<{id: string; kind: 'file' | 'image'; name: string; size?: number}>>([]);
+  // Holds the ACTUAL attachment data (image data URIs / file text) queued for
+  // the next turn — kept in a ref so it doesn't trigger re-renders. Populated
+  // by attachImageFile/attachTextFile, drained on a successful sendPrompt.
+  const pendingDataRef = useMemo(() => ({current: [] as Array<{kind: 'file' | 'image'; name: string; size?: number; dataUri?: string; content?: string; mime?: string}>}), []);
   const [activeProfile, setActiveProfileState] = useState<string | null>(null);
   const [activeWorkspace, setActiveWorkspaceState] = useState<string | null>(null);
   const [projects, setProjects] = useState<any[]>([]);
@@ -309,8 +366,11 @@ export function AppProvider({children}: {children: React.ReactNode}) {
       setConnecting(true);
       setConnectionError(null);
 
-      // Try the desktop first if user asked for it (or 'auto').
-      const tryDesktop = mode !== 'minimax' && !!cfg.host && !!cfg.password;
+      // Try the desktop first if user asked for it (or 'auto'). The
+      // client now supports passwordless mode (skips /auth/password-login),
+      // so an empty password is fine — `!!cfg.host` is the only true
+      // precondition for attempting the desktop.
+      const tryDesktop = mode !== 'minimax' && !!cfg.host;
       if (tryDesktop) {
         try {
           const client = new HermesClient(cfg);
@@ -324,14 +384,21 @@ export function AppProvider({children}: {children: React.ReactNode}) {
             setServerOnline(false);
             throw e;
           }
-          // mode === 'auto' && desktop failed → continue to fallback.
+          // mode === 'auto' || 'minimax'(engineMode) → desktop failed,
+          // continue to fallback. Note: even when mode === 'minimax'
+          // (user pinned cloud), if desktop fails the user almost
+          // certainly wants to TRY the cloud fallback anyway, so we
+          // don't re-throw — we keep going.
+          setServerOnline(false);
         }
       } else {
         setServerOnline(false);
       }
 
-      // Fallback: direct model API.
-      const minimaxCfg = pickMinimaxCfg(cfg);
+      // Fallback: direct model API. Accept keys from the legacy
+      // single-provider slot OR the new multi-provider system
+      // (providerConfigs.minimax). Whichever has a key wins.
+      const minimaxCfg = pickMinimaxCfg(cfg, providerConfigs);
       if (!minimaxCfg) {
         throw new HermesError(
           'No desktop server reachable, and no model API key configured. Add a key in Settings → AI.',
@@ -350,7 +417,9 @@ export function AppProvider({children}: {children: React.ReactNode}) {
       setOfflineModeBanner(true);
       return m;
     },
-    [],
+    // providerConfigs is read at call-time so updates from Settings
+    // are picked up the next time the user pings connect.
+    [providerConfigs],
   );
 
   const doConnect = useCallback(
@@ -360,6 +429,7 @@ export function AppProvider({children}: {children: React.ReactNode}) {
       try {
         const e = await buildEngine(cfg, cfg.engineMode ?? 'auto');
         setEngine(e);
+        engineRef.current = e;
         setScreen('home');
         // Pre-fetch sessions where possible.
         try {
@@ -409,6 +479,29 @@ export function AppProvider({children}: {children: React.ReactNode}) {
 
   const connect = useCallback(async () => doConnect(config), [config, doConnect]);
 
+  /** Force a fresh connect. Tears down any prior engine, then builds
+   *  a new one. Used by Home's retry button when connectionError is
+   *  set, and by openOrCreateSession when the engine reference is
+   *  null. Safe to call repeatedly — the underlying HermesClient /
+   *  MinimaxEngine constructors are cheap and the prior WS / abort
+   *  controllers are torn down by their disconnect(). */
+  const retryConnect = useCallback(async () => {
+    setConnectionError(null);
+    await doConnect(config);
+  }, [config, doConnect]);
+
+  // Boot-strap connect — runs ONCE after the layout wires up. The `null`
+  // dependency array means "fire on mount only". See the comment on the
+  // config-load effect for why we don't subscribe to config changes
+  // (that would tear down the WS during Settings edits).
+  const bootConnectedRef = useMemo(() => ({current: false}), []);
+  useEffect(() => {
+    if (bootConnectedRef.current) return;
+    bootConnectedRef.current = true;
+    void doConnect(config);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const switchEngine = useCallback(
     async (mode: 'auto' | 'desktop' | 'minimax') => {
       const cfg = {...config, engineMode: mode};
@@ -426,6 +519,7 @@ export function AppProvider({children}: {children: React.ReactNode}) {
     }
     engine?.disconnect();
     setEngine(null);
+    engineRef.current = null;
     setCurrentSession(null);
     setMessages([]);
     setStreamedText('');
@@ -440,6 +534,7 @@ export function AppProvider({children}: {children: React.ReactNode}) {
     }
     engine?.disconnect();
     setEngine(null);
+    engineRef.current = null;
     setCurrentSession(null);
     setMessages([]);
     setStreamedText('');
@@ -447,7 +542,10 @@ export function AppProvider({children}: {children: React.ReactNode}) {
     setSessions([]);
     setServerOnline(false);
     setOfflineModeBanner(false);
-    setScreen('login');
+    // No login wall — stay on home instead of routing back to a
+    // (now-removed) login screen. The user can manually switch engine
+    // from the Home status row if they want to re-probe.
+    setScreen('home');
   }, [engine, streamRef]);
 
   const refreshSessions = useCallback(async () => {
@@ -501,34 +599,168 @@ export function AppProvider({children}: {children: React.ReactNode}) {
 
   const openOrCreateSession = useCallback(
     async (agentId?: string): Promise<string> => {
-      if (!engine) throw new Error('Not connected');
+      // Auto-recover: if no engine is set (the prior connect failed or
+      // is still pending), retry the connect first. We don't throw at
+      // the call-site any more — opening a chat from Home is a much
+      // more common path than the user wants to "see the engine
+      // diagnostics". The connect happens behind the scenes; if it
+      // still fails, setEngine stays null and ChatScreen will surface
+      // a "set up API key" hint instead of crashing.
+      let active = engine;
+      if (!active) {
+        try {
+          await doConnect(config);
+          active = engineRef.current;
+        } catch {
+          /* fall through with active === null; ChatScreen handles it */
+        }
+      }
+      if (!active) throw new Error('Not connected');
       const agent = agentId ? agentById(agentId) ?? null : null;
       const title = agent ? agent.name : 'Quick Chat';
-      const sid = await engine.createSession(title);
+      const sid = await active.createSession(title);
       // Set the active session id back on the engine so loadHistory works.
-      if (engine.id === 'desktop') {
-        (engine as HermesEngine)['client']?.setSessionId?.(sid);
+      if (active.id === 'desktop') {
+        (active as HermesEngine)['client']?.setSessionId?.(sid);
       } else {
-        (engine as MinimaxEngine).setSessionId(sid);
+        (active as MinimaxEngine).setSessionId(sid);
       }
       setCurrentSession(sid);
+      setCurrentSessionTitle(title);
       setCurrentAgent(agent);
       setMessages([]);
       setStreamedText('');
       return sid;
     },
-    [engine],
+    // engineRef reads the latest engine state without making this
+    // callback churn on every connect — see useMemo ref below.
+    [engine, config, doConnect],
   );
+
+  /** Produce a short session title. Uses the MiniMax cloud for a smart
+   *  title when a key is available; otherwise derives one from the first
+   *  user message. Never throws. */
+  const genTitle = useCallback(async (userText: string, assistantText: string): Promise<string> => {
+    const fallback = () => {
+      const s = (userText || '').trim().replace(/\s+/g, ' ');
+      if (!s) return 'New chat';
+      return s.length <= 42 ? s : s.slice(0, 42).trim() + '…';
+    };
+    const mm = pickMinimaxCfg(config, providerConfigs);
+    if (!mm) return fallback();
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${mm.apiKey}`,
+      };
+      if (mm.groupId) headers.GroupId = mm.groupId;
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 12000);
+      const r = await fetch(`${mm.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+        method: 'POST',
+        headers,
+        signal: ctrl.signal,
+        body: JSON.stringify({
+          model: mm.model,
+          stream: false,
+          messages: [
+            {role: 'system', content: 'You write a concise 3-6 word title for a conversation. Reply with ONLY the title — no quotes, no trailing punctuation.'},
+            {role: 'user', content: `User: ${userText.slice(0, 600)}\nAssistant: ${assistantText.slice(0, 600)}\n\nTitle:`},
+          ],
+        }),
+      });
+      clearTimeout(timer);
+      if (!r.ok) return fallback();
+      const j: any = await r.json();
+      let t: string = j?.choices?.[0]?.message?.content ?? j?.choices?.[0]?.text ?? '';
+      t = String(t).replace(/["'`\r\n]/g, ' ').replace(/\s+/g, ' ').trim().replace(/[.。!?]+$/, '');
+      if (!t) return fallback();
+      return t.length > 48 ? t.slice(0, 48).trim() + '…' : t;
+    } catch {
+      return fallback();
+    }
+  }, [config, providerConfigs]);
+
+  /** Human-readable byte string ("3.4 MB", "1.2 KB", "47 B"). Used when
+   *  inlining binary attachments so the agent can see the file's size
+   *  without us forcing a full UTF-8 dump. */
+  function formatBytes(n: number): string {
+    if (!n || n < 0) return '?';
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+    return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  }
+
+  /** Pick a code-fence language hint from the filename's extension so the
+   *  model can syntax-highlight / parse the inlined attachment correctly. */
+  function guessFenceLang(name?: string): string {
+    const lower = (name || '').toLowerCase();
+    if (lower.endsWith('.py')) return 'python';
+    if (lower.endsWith('.ts') || lower.endsWith('.tsx')) return 'typescript';
+    if (lower.endsWith('.js') || lower.endsWith('.jsx')) return 'javascript';
+    if (lower.endsWith('.json')) return 'json';
+    if (lower.endsWith('.md')) return 'markdown';
+    if (lower.endsWith('.yaml') || lower.endsWith('.yml')) return 'yaml';
+    if (lower.endsWith('.csv')) return 'csv';
+    if (lower.endsWith('.html') || lower.endsWith('.htm')) return 'html';
+    if (lower.endsWith('.css')) return 'css';
+    if (lower.endsWith('.sql')) return 'sql';
+    if (lower.endsWith('.sh') || lower.endsWith('.bash')) return 'bash';
+    if (lower.endsWith('.rs')) return 'rust';
+    if (lower.endsWith('.go')) return 'go';
+    if (lower.endsWith('.kt') || lower.endsWith('.kts')) return 'kotlin';
+    return '';
+  }
 
   const sendPrompt = useCallback(
     async (text: string) => {
       if (!engine || !currentSession || !text.trim()) return;
       const firstTurn = messages.length === 0;
+      // Snapshot the queued attachments for this turn.
+      const outboundAtts = pendingDataRef.current.slice();
+      const userImages = outboundAtts
+        .filter(a => a.kind === 'image' && a.dataUri)
+        .map(a => ({kind: 'image' as const, name: a.name, dataUri: a.dataUri, mime: a.mime}));
+      const userFiles = outboundAtts.filter(a => a.kind === 'file');
+
+      // Inline file contents into the prompt text so the agent always sees
+      // them, even when the server's `file.attach` RPC isn't implemented.
+      // Each non-image attachment becomes a fenced block in the prompt —
+      // filename + optional first N chars + length summary. Binary files
+      // (whose `content` is the `[binary:...]` placeholder or looks like
+      // a UTF-8 decode failure) are summarised instead of dumped; the
+      // server can still pick up the raw bytes out-of-band if its
+      // attachFile RPC is available (handled by attachTextFile caller).
+      const attachmentBlock = userFiles.length
+        ? '\n\n' + userFiles.map(a => {
+            const name = a.name || 'file';
+            const c = a.content ?? '';
+            const isBinaryPlaceholder = c.startsWith('[binary:') || c.startsWith('[binary]');
+            if (isBinaryPlaceholder) {
+              const bytes = a.size ? ` (~${formatBytes(a.size)})` : '';
+              return `\`\`\`\nATTACHMENT: ${name}${bytes} (binary; not inlined — see server-side attach if available)\n\`\`\``;
+            }
+            // Cap inlined content at 6 KB per file so a giant log file doesn't
+            // blow the context window. Show the head if truncated.
+            const MAX = 6 * 1024;
+            const truncated = c.length > MAX;
+            const body = truncated ? c.slice(0, MAX) : c;
+            return `\`\`\`${guessFenceLang(a.name)}\nATTACHMENT: ${name} (${c.length.toLocaleString()} chars${truncated ? `, first ${MAX.toLocaleString()} shown` : ''})\n${body}${truncated ? '\n…(truncated)' : ''}\n\`\`\``;
+          }).join('\n\n') + '\n'
+        : '';
+      const promptWithAtts = text + attachmentBlock;
       const effectiveText =
         firstTurn && currentAgent
-          ? `[System: ${currentAgent.systemPrompt}]\n\n${text}`
-          : text;
-      const userMsg: ChatMessage = {role: 'user', text, ts: Date.now()};
+          ? `[System: ${currentAgent.systemPrompt}]\n\n${promptWithAtts}`
+          : promptWithAtts;
+
+      const userMsg: ChatMessage = {
+        role: 'user',
+        text,
+        ts: Date.now(),
+        attachments: userImages.length ? userImages : undefined,
+      };
       setMessages(prev => [...prev, userMsg]);
       setStreaming(true);
       setStreamedText('');
@@ -545,6 +777,7 @@ export function AppProvider({children}: {children: React.ReactNode}) {
       if (activeWorkspace) turnOpts.workspace = activeWorkspace;
       if (activeProfile) turnOpts.profile = activeProfile;
       if (activeProjectId) turnOpts.projectId = activeProjectId;
+      if (outboundAtts.length) turnOpts.attachments = outboundAtts;
 
       // Accumulate reasoning locally so we can attach it to the finished
       // message (the engine `done` promise only carries the answer text).
@@ -571,20 +804,33 @@ export function AppProvider({children}: {children: React.ReactNode}) {
 
       const handle = engine.submitPrompt(effectiveText, currentSession, turnOpts);
       streamRef.current = handle;
+      let assistantMsg: ChatMessage | null = null;
       try {
         const result = await handle.done;
-        const assistantMsg: ChatMessage = {
+        assistantMsg = {
           role: 'assistant',
           text: result.text,
           reasoning: reasoningAccum || undefined,
           usage: result.usage,
           ts: Date.now(),
         };
-        setMessages(prev => [...prev, assistantMsg]);
+        setMessages(prev => assistantMsg ? [...prev, assistantMsg] : prev);
         setStreamedText('');
         setStreamedReasoning('');
-        // Successful submit — clear any queued attachments.
+        // Successful submit — clear any queued attachments (metadata + data).
         setPendingAttachments([]);
+        pendingDataRef.current = [];
+        // Auto-generate a session title after the first exchange.
+        if (firstTurn && currentSession && result.text) {
+          const sid = currentSession;
+          void (async () => {
+            const title = await genTitle(text, result.text);
+            if (!title) return;
+            setCurrentSessionTitle(title);
+            setSessions(prev => prev.map(s => (s.id === sid ? {...s, title} : s)));
+            try { await engine.setSessionTitle?.(sid, title); } catch { /* best-effort */ }
+          })();
+        }
         // Write-through the freshest conversation to the offline cache so
         // it's readable later without the LAN server. (Minimax persists its
         // own sessions internally, so only cache desktop turns here.)
@@ -610,9 +856,33 @@ export function AppProvider({children}: {children: React.ReactNode}) {
         off();
         setStreaming(false);
         streamRef.current = null;
+        // Post a "reply ready" notification if the user has the app
+        // backgrounded / locked or is on a different tab. We don't try
+        // to be clever about checking app foreground state here — the
+        // phone handles that for us at the OS level (the notif heads-up
+        // appears even with the app open, which is fine here because
+        // the user just submitted a prompt and is likely to look up
+        // from the keyboard for the result). We DO suppress the notif
+        // when the user is on the chat screen looking at the same
+        // session, which is the actual noise we'd want to avoid.
+        if (currentSession && assistantMsg && assistantMsg.text) {
+          const suppress = screen === 'chat';
+          void (async () => {
+            try {
+              const {notifyReplyReadyIfBackgrounded} = await import('../api/notifications');
+              await notifyReplyReadyIfBackgrounded({
+                sessionId: currentSession,
+                sessionTitle: currentSessionTitle,
+                previewText: assistantMsg.text,
+                engineLabel: engine?.id === 'minimax' ? 'mobile' : 'desktop',
+                suppressed: suppress,
+              });
+            } catch { /* notifs are best-effort */ }
+          })();
+        }
       }
     },
-    [engine, currentSession, currentAgent, messages, streamRef, chatOptions, activeWorkspace, activeProfile, activeProjectId, modelsStore, historyCache],
+    [engine, currentSession, currentAgent, messages, streamRef, chatOptions, activeWorkspace, activeProfile, activeProjectId, modelsStore, historyCache, genTitle, pendingDataRef],
   );
 
   /** Inject guidance into an in-flight turn without aborting. */
@@ -627,6 +897,7 @@ export function AppProvider({children}: {children: React.ReactNode}) {
   const resumeSession = useCallback(async (id: string) => {
     if (!engine) return;
     setCurrentSession(id);
+    setCurrentSessionTitle(sessions.find(s => s.id === id)?.title ?? null);
     if (engine.id === 'desktop') {
       (engine as HermesEngine)['client']?.setSessionId?.(id);
     } else {
@@ -663,32 +934,55 @@ export function AppProvider({children}: {children: React.ReactNode}) {
     setScreen('chat');
   }, [engine, historyCache, sessions]);
 
-  /** Attach a text/base64 file to the active session (best-effort). */
-  const attachTextFile = useCallback(async (name: string, content: string, mime?: string) => {
-    if (!engine || !currentSession) return;
-    if (engine.id === 'desktop') {
+  /** Attach a file to the next turn. Held in the data ref for the
+   *  cloud engine (inlined at send time) and also pushed to the desktop
+   *  server out-of-band when connected. `base64Data` is optional and
+   *  carries binary bytes for non-text attachments; servers that
+   *  implement the extended `attachFile` contract can use it. */
+  const attachTextFile = useCallback(async (name: string, content: string, mime?: string, base64Data?: string) => {
+    pendingDataRef.current.push({kind: 'file', name, content, mime, dataUri: base64Data ? `data:${mime ?? 'application/octet-stream'};base64,${base64Data}` : undefined});
+    if (engine?.id === 'desktop' && currentSession) {
       try {
-        await (engine as HermesEngine).attachFile?.(currentSession, {name, content, mime});
+        await (engine as HermesEngine).attachFile?.(currentSession, {
+          name,
+          content,
+          mime,
+          // Servers that support base64 bytes opt into raw delivery by
+          // checking this field; legacy attachFile RPCs ignore unknown
+          // keys, so passing it is harmless.
+          ...(base64Data ? {data: base64Data, encoding: 'base64'} : {}),
+        } as any);
       } catch { /* best-effort */ }
     }
-  }, [engine, currentSession]);
+  }, [engine, currentSession, pendingDataRef]);
 
   const attachImageFile = useCallback(async (name: string, base64: string, mime?: string) => {
-    if (!engine || !currentSession) return;
-    if (engine.id === 'desktop') {
+    const dataUri = base64.startsWith('data:') ? base64 : `data:${mime ?? 'image/jpeg'};base64,${base64}`;
+    pendingDataRef.current.push({kind: 'image', name, dataUri, mime});
+    if (engine?.id === 'desktop' && currentSession) {
       try {
         await (engine as HermesEngine).attachImage?.(currentSession, {name, data: base64, mime});
       } catch { /* best-effort */ }
     }
-  }, [engine, currentSession]);
+  }, [engine, currentSession, pendingDataRef]);
 
   const addAttachment = useCallback((a: {kind: 'file' | 'image'; name: string; size?: number}) => {
     setPendingAttachments(prev => [...prev, {...a, id: `${Date.now()}-${Math.random().toString(36).slice(2,8)}`}]);
   }, []);
   const removeAttachment = useCallback((id: string) => {
-    setPendingAttachments(prev => prev.filter(a => a.id !== id));
-  }, []);
-  const clearAttachments = useCallback(() => setPendingAttachments([]), []);
+    setPendingAttachments(prev => {
+      const item = prev.find(a => a.id === id);
+      if (item) {
+        const idx = pendingDataRef.current.findIndex(d => d.kind === item.kind && d.name === item.name);
+        if (idx >= 0) pendingDataRef.current.splice(idx, 1);
+      }
+      return prev.filter(a => a.id !== id);
+    });
+  }, [pendingDataRef]);
+  const clearAttachments = useCallback(() => {
+    pendingDataRef.current = [];
+    setPendingAttachments([]);
+  }, [pendingDataRef]);
 
   const setChatOptions = useCallback((opts: ChatOptions) => {
     setChatOptionsState(opts);
@@ -823,10 +1117,13 @@ export function AppProvider({children}: {children: React.ReactNode}) {
     setScreen,
     connect,
     disconnect,
+    retryConnect,
     logout,
     switchEngine,
     currentSession,
     setCurrentSession,
+    currentSessionTitle,
+    setCurrentSessionTitle,
     messages,
     setMessages,
     appendMessage,

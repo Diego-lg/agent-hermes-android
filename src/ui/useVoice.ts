@@ -18,10 +18,17 @@ import {makeVoiceStore, VoiceSettings, DEFAULT_VOICE_SETTINGS, ClonedVoice} from
 import {
   MinimaxCreds, t2aUrl, isMinimaxModelId,
   uploadCloneFile, cloneVoice, makeCloneVoiceId, CloneFile,
+  listVoices, VoiceInfo,
 } from '../api/minimaxVoice';
 import * as audio from '../api/audioBridge';
 
 const store = makeVoiceStore();
+
+/** Map Android SpeechRecognizer RMS dB (~ -2..10) to a 0..1 amplitude. */
+function normalizeDb(raw: number): number {
+  const v = (raw + 2) / 12;
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
 
 export interface UseVoice {
   settings: VoiceSettings;
@@ -31,8 +38,13 @@ export interface UseVoice {
   sttAvailable: boolean;                // native speech-to-text linked
   speaking: boolean;
   listening: boolean;
+  micLevel: number;                     // 0..1 smoothed live mic amplitude
   transcript: string;
   lastError: string | null;
+  allVoices: VoiceInfo[];               // full fetched voice catalog (system + cloned + generated)
+  voicesLoading: boolean;
+  voicesError: string | null;
+  refreshVoices: () => Promise<void>;
   patch: <K extends keyof VoiceSettings>(k: K, v: VoiceSettings[K]) => void;
   speak: (text: string) => Promise<void>;
   stopSpeaking: () => Promise<void>;
@@ -59,9 +71,21 @@ export function useVoice(): UseVoice {
   const [settings, setSettings] = useState<VoiceSettings>(DEFAULT_VOICE_SETTINGS);
   const [speaking, setSpeaking] = useState(false);
   const [listening, setListening] = useState(false);
+  const [micLevel, setMicLevel] = useState(0);
   const [transcript, setTranscript] = useState('');
   const [lastError, setLastError] = useState<string | null>(null);
+  const [allVoices, setAllVoices] = useState<VoiceInfo[]>([]);
+  const [voicesLoading, setVoicesLoading] = useState(false);
+  const [voicesError, setVoicesError] = useState<string | null>(null);
   const finalCb = useRef<((t: string) => void) | null>(null);
+  const lastVolTs = useRef(0);
+  const decayTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const clearDecay = useCallback(() => {
+    if (decayTimer.current) { clearInterval(decayTimer.current); decayTimer.current = null; }
+  }, []);
+  // Ensure the decay timer never leaks.
+  useEffect(() => () => { if (decayTimer.current) clearInterval(decayTimer.current); }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -161,6 +185,7 @@ export function useVoice(): UseVoice {
     }
     finalCb.current = opts?.onFinal ?? null;
     setTranscript('');
+    setMicLevel(0);
     try {
       await audio.startListening({
         onPartial: t => setTranscript(t),
@@ -168,26 +193,52 @@ export function useVoice(): UseVoice {
           setTranscript(t);
           finalCb.current?.(t);
         },
-        onError: msg => { setLastError(msg); setListening(false); },
-        onEnd: () => setListening(false),
+        onVolume: raw => {
+          lastVolTs.current = Date.now();
+          const lvl = Math.round(normalizeDb(raw) * 20) / 20; // quantize to reduce churn
+          setMicLevel(prev => (Math.abs(prev - lvl) >= 0.05 ? lvl : prev));
+        },
+        onError: msg => { setLastError(msg); setListening(false); setMicLevel(0); clearDecay(); },
+        onEnd: () => { setListening(false); setMicLevel(0); clearDecay(); },
       });
       setListening(true);
+      // Decay the level toward 0 when volume events go quiet (silence/pauses).
+      clearDecay();
+      decayTimer.current = setInterval(() => {
+        if (Date.now() - lastVolTs.current < 180) return;
+        setMicLevel(prev => (prev <= 0.05 ? 0 : Math.round(prev * 0.55 * 20) / 20));
+      }, 120);
     } catch (e: any) {
       setLastError(e?.message ?? String(e));
       setListening(false);
+      setMicLevel(0);
+      clearDecay();
     }
-  }, []);
+  }, [clearDecay]);
 
   const stopListening = useCallback(async () => {
     await audio.stopListening();
     setListening(false);
-  }, []);
+    setMicLevel(0);
+    clearDecay();
+  }, [clearDecay]);
+
+  const refreshVoices = useCallback(async () => {
+    if (!creds) { setVoicesError('Add your MiniMax API key first.'); return; }
+    setVoicesLoading(true);
+    setVoicesError(null);
+    const res = await listVoices(creds);
+    if (res.ok) setAllVoices(res.voices);
+    else setVoicesError(res.error);
+    setVoicesLoading(false);
+  }, [creds]);
 
   return {
     settings, ready, minimaxSelected,
     audioAvailable: audio.isAudioAvailable(),
     sttAvailable: audio.isSttAvailable(),
-    speaking, listening, transcript, lastError,
+    speaking, listening, micLevel, transcript, lastError,
+    allVoices, voicesLoading, voicesError, refreshVoices,
     patch, speak, stopSpeaking, cloneFromFile, removeClone,
     startListening, stopListening,
   };

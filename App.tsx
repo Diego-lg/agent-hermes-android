@@ -13,7 +13,6 @@ import ChatScreen from './src/ui/ChatScreen';
 import AgentsScreen from './src/ui/AgentsScreen';
 import SettingsScreen from './src/ui/SettingsScreen';
 import ProfileScreen from './src/ui/ProfileScreen';
-import LoginScreen from './src/ui/LoginScreen';
 import NotesScreen from './src/ui/NotesScreen';
 import NoteEditorScreen from './src/ui/NoteEditorScreen';
 import CronScreen from './src/ui/CronScreen';
@@ -26,12 +25,36 @@ import WorkspaceScreen from './src/ui/WorkspaceScreen';
 import MemoryScreen from './src/ui/MemoryScreen';
 import InsightsScreen from './src/ui/InsightsScreen';
 import YoloScreen from './src/ui/YoloScreen';
+import GroupChatScreen from './src/ui/GroupChatScreen';
+import PersonalityLibraryScreen from './src/ui/PersonalityLibraryScreen';
 import {notesStore} from './src/api/notesStore';
 
 function Shell() {
-  const {screen, setScreen, currentSession} = useApp();
+  const {screen, setScreen, setCurrentSession, currentSession} = useApp();
   const {theme} = useThemeController();
   const [notesReady, setNotesReady] = useState(false);
+
+  // Wire notification taps → in-app navigation. Backend posts a `reply-<sid>`
+  // tag on the channel's "reply ready" notification; tapping it should put
+  // the user in the chat for that session even if they're on Home.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const {subscribeNotificationTaps} = await import('./src/api/notifications');
+        if (cancelled) return;
+        const off = subscribeNotificationTaps(p => {
+          // Ensure the engine is loaded for the tapped session before
+          // navigating so ChatScreen doesn't render an empty placeholder.
+          if (p.sessionId) setCurrentSession(p.sessionId);
+          if (p.screen) setScreen(p.screen as any);
+        });
+        return () => off();
+      } catch { /* notif taps are optional */ }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -59,11 +82,7 @@ function Shell() {
     return () => { cancelled = true; };
   }, [screen]);
 
-  if (screen === 'login') {
-    return <LoginScreen />;
-  }
-
-  const tab: Tab = screen === 'profile' ? 'settings' : (screen as Tab);
+  const tab: Tab = screen as Tab;
 
   return (
     <View style={{flex: 1, backgroundColor: theme.palette.bg}}>
@@ -88,6 +107,8 @@ function Shell() {
         {screen === 'workspace' && <WorkspaceScreen />}
         {screen === 'memory' && <MemoryScreen />}
         {screen === 'insights' && <InsightsScreen />}
+        {screen === 'groupChat' && <GroupChatScreen />}
+        {screen === 'personalities' && <PersonalityLibraryScreen />}
         {screen === 'yolo' && <YoloScreen onClose={() => setScreen('settings')} />}
       </View>
       <BottomNav

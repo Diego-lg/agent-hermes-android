@@ -10,7 +10,7 @@
 import React, {useEffect, useRef, useState, useCallback} from 'react';
 import {
   View, FlatList, TextInput, TouchableOpacity, KeyboardAvoidingView,
-  Platform, Text, Animated, Clipboard, Modal, ScrollView, Alert,
+  Platform, Text, Animated, Clipboard, Modal, ScrollView, Alert, Image,
 } from 'react-native';
 import {useApp} from './AppContext';
 import {useTheme} from './theme.tsx';
@@ -18,12 +18,15 @@ import {
   ChevronLeftIcon, SendIcon, StopIcon, ArrowUpRightIcon, LightbulbIcon,
   CopyIcon, CheckIcon, PaperclipIcon, CameraIcon, XIcon, CpuIcon,
   ChevronDownIcon, CompassIcon, UserIcon, RefreshIcon,
-  Volume2Icon, VolumeXIcon, MicIcon, MicOffIcon, WaveIcon,
+  Volume2Icon, VolumeXIcon, MicIcon, MicOffIcon, WaveIcon, PlayIcon,
 } from './icons';
 import MarkdownText from './MarkdownText';
 import {launchImageLibrary, launchCamera} from 'react-native-image-picker';
 import DocumentPicker from 'react-native-document-picker';
 import {useVoice} from './useVoice';
+import SpeechToSpeechOverlay from './SpeechToSpeechOverlay';
+import * as audioBridge from '../api/audioBridge';
+import {readAsBase64, looksTextual} from '../api/fileBase64';
 
 interface ToolEvent {
   name: string;
@@ -35,11 +38,91 @@ function formatTime(ts: number): string {
   return d.toTimeString().slice(0, 8);
 }
 
+/* ---- Inline media (generated images / audio) ------------------------------ */
+
+const IMG_EXT = /\.(?:png|jpe?g|gif|webp|bmp)(?:\?[^\s)]*)?$/i;
+const AUD_EXT = /\.(?:mp3|wav|ogg|m4a|aac|flac)(?:\?[^\s)]*)?$/i;
+
+/** Pull image + audio URLs (markdown, bare links, and data: URIs) out of a
+ *  message body so they can be rendered inline below the text. */
+function extractMedia(text: string): {images: string[]; audios: string[]} {
+  const images: string[] = [];
+  const audios: string[] = [];
+  const seen = new Set<string>();
+  const add = (arr: string[], u: string) => { if (u && !seen.has(u)) { seen.add(u); arr.push(u); } };
+  if (!text) return {images, audios};
+  const md = /!\[[^\]]*\]\(\s*<?([^)\s>]+)>?\s*(?:"[^"]*")?\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = md.exec(text))) {
+    const u = m[1];
+    if (u.startsWith('data:audio') || AUD_EXT.test(u)) add(audios, u);
+    else add(images, u);
+  }
+  const url = /(data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+|data:audio\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+|https?:\/\/[^\s)"'<>]+)/g;
+  while ((m = url.exec(text))) {
+    const u = m[1];
+    if (u.startsWith('data:image') || IMG_EXT.test(u)) add(images, u);
+    else if (u.startsWith('data:audio') || AUD_EXT.test(u)) add(audios, u);
+  }
+  return {images, audios};
+}
+
+const InlineImage: React.FC<{uri: string}> = ({uri}) => {
+  const {palette, spacing} = useTheme();
+  const [ratio, setRatio] = useState(1.5);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let ok = true;
+    Image.getSize(
+      uri,
+      (w, h) => { if (ok && h > 0) setRatio(Math.max(0.4, Math.min(2.5, w / h))); },
+      () => { if (ok) setFailed(true); },
+    );
+    return () => { ok = false; };
+  }, [uri]);
+  if (failed) return null;
+  return (
+    <View style={{marginTop: spacing.sm, borderWidth: 1, borderColor: palette.border, borderRadius: 6, overflow: 'hidden', maxWidth: 320}}>
+      <Image source={{uri}} style={{width: '100%', aspectRatio: ratio, backgroundColor: palette.surfaceAlt}} resizeMode="cover" />
+    </View>
+  );
+};
+
+const InlineAudio: React.FC<{uri: string; label?: string; fontFamily?: any}> = ({uri, label, fontFamily}) => {
+  const {palette, type} = useTheme();
+  const [playing, setPlaying] = useState(false);
+  const available = audioBridge.isAudioAvailable();
+  useEffect(() => () => { void audioBridge.stopPlayback().catch(() => {}); }, []);
+  const toggle = async () => {
+    if (playing) { await audioBridge.stopPlayback().catch(() => {}); setPlaying(false); return; }
+    if (!available) return;
+    setPlaying(true);
+    try { await audioBridge.playUrl(uri); } catch { /* ignore */ } finally { setPlaying(false); }
+  };
+  return (
+    <TouchableOpacity
+      onPress={() => void toggle()}
+      disabled={!available}
+      style={{
+        flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8,
+        paddingVertical: 10, paddingHorizontal: 12,
+        borderWidth: 1, borderColor: palette.border, backgroundColor: palette.surface,
+        maxWidth: 320, opacity: available ? 1 : 0.5,
+      }}>
+      {playing ? <StopIcon size={14} color={palette.error} filled /> : <PlayIcon size={14} color={palette.accent} />}
+      <Text style={[type.mono, {color: palette.text, fontSize: 11, flex: 1, fontFamily}]} numberOfLines={1}>
+        {playing ? 'PLAYING…' : (label || 'PLAY AUDIO')}
+      </Text>
+      <Volume2Icon size={12} color={palette.textDim} />
+    </TouchableOpacity>
+  );
+};
+
 const REASONING_OPTIONS = ['minimal', 'low', 'medium', 'high', 'xhigh'];
 
 export default function ChatScreen() {
   const {
-    engine, currentSession, messages, streaming, streamedText, streamedReasoning,
+    engine, currentSession, currentSessionTitle, messages, streaming, streamedText, streamedReasoning,
     sendPrompt, abortStream, steerStream, currentAgent, setScreen,
     chatOptions, setChatOptions, activeWorkspace, activeProfile,
     pendingAttachments, addAttachment, removeAttachment,
@@ -61,7 +144,25 @@ export default function ChatScreen() {
   // ----- Voice Assistant MODE (MiniMax) -----
   const voice = useVoice();
   const [voiceMode, setVoiceMode] = useState(false);
+  const [s2sOpen, setS2sOpen] = useState(false);
+  const [speakingIdx, setSpeakingIdx] = useState<number | null>(null);
   const spokenRef = useRef(0);
+
+  // Clear the per-message "speaking" highlight when playback ends.
+  useEffect(() => {
+    if (!voice.speaking) setSpeakingIdx(null);
+  }, [voice.speaking]);
+
+  const onOpenS2S = useCallback(() => {
+    if (!voice.ready) {
+      Alert.alert('Voice needs MiniMax', 'Add your MiniMax API key in Settings → AI to use Speech to Speech.');
+      return;
+    }
+    void voice.stopSpeaking();
+    void voice.stopListening();
+    setVoiceMode(false);
+    setS2sOpen(true);
+  }, [voice]);
 
   // Auto-speak the newest completed assistant reply while Voice Mode is on.
   useEffect(() => {
@@ -173,6 +274,17 @@ export default function ChatScreen() {
     if (busyAttach) return;
     setBusyAttach(true);
     try {
+      // Camera needs CAMERA permission at runtime on Android. The image-picker
+      // library doesn't request it for us, so without this gate the user just
+      // gets a silent blank result on the first tap. Refactored to use the
+      // shared gate so any future caller doesn't need to remember.
+      if (useCamera) {
+        const granted = await audioBridge.ensureCameraPermission();
+        if (!granted) {
+          Alert.alert('Camera blocked', 'Enable Camera permission for android-hermes in Settings → Apps → Permissions.');
+          return;
+        }
+      }
       const launcher = useCamera ? launchCamera : launchImageLibrary;
       const res = await launcher({
         mediaType: 'photo',
@@ -206,21 +318,49 @@ export default function ChatScreen() {
       });
       if (!file.fileCopyUri && !file.uri) return;
       const uri = (file.fileCopyUri ?? file.uri) as string;
-      let content = '';
-      try {
-        // Best-effort: read via fetch (RN supports file:// on Android).
-        const res = await fetch(uri);
-        content = await res.text();
-      } catch {
-        // Binary file — surface the path as text so the server knows about it.
-        Alert.alert('Binary file', 'Text content only is supported in this build. The file path is recorded as a placeholder.');
-        content = `[binary:${file.name ?? file.type}]`;
-      }
       const name = file.name ?? `file-${Date.now()}`;
+      const mime = (file.type ?? 'application/octet-stream').toLowerCase();
+
+      let content = '';
+      let asBase64: string | undefined;
+      if (looksTextual(name, mime)) {
+        try {
+          // Best-effort: read via fetch (RN supports file:// on Android).
+          const res = await fetch(uri);
+          content = await res.text();
+        } catch {
+          // File isn't UTF-8 — fall through to base64 below.
+          asBase64 = (await readAsBase64(uri)) ?? undefined;
+          if (!asBase64) content = `[binary:${name}]`;
+        }
+      } else {
+        // Binary path — try to read as base64 so attachFile on the server
+        // can carry the bytes even when the cloud engine ignores binary.
+        asBase64 = (await readAsBase64(uri)) ?? undefined;
+        if (!asBase64) {
+          Alert.alert(
+            'Could not read file',
+            `${name} could not be read as text or base64. Try a smaller file (<10 MB) or convert to .txt.`,
+          );
+          return;
+        }
+        // Encode a small summary as the "content" slot so the agent still
+        // has a breadcrumb in the prompt (filename + mime + size).
+        content = `[binary:${name} (${mime}, ${(file.size ?? 0).toLocaleString()} B)]`;
+      }
+
       addAttachment({kind: 'file', name, size: file.size ?? undefined});
       try {
-        await attachTextFile(name, content, file.type ?? 'text/plain');
-      } catch {/* fine */}
+        await attachTextFile(
+          name,
+          content,
+          mime,
+          asBase64, // undefined for text, base64 bytes for binary — attachTextFile
+                    // forwards it down to the engine.attachFile RPC as an
+                    // optional `data` field so the server side CAN carry raw
+                    // bytes if it implements the extended contract.
+        );
+      } catch {/* best-effort */}
     } catch (e: any) {
       if (DocumentPicker.isCancel(e)) return;
       Alert.alert('File pick failed', e?.message ?? String(e));
@@ -267,13 +407,26 @@ export default function ChatScreen() {
           <ChevronLeftIcon size={20} color={palette.textMuted} />
         </TouchableOpacity>
         <View style={{flex: 1}}>
-          <Text style={[type.h2, {fontSize: 13, letterSpacing: 0.5}]}>
-            {agent ? agent.name.toUpperCase() : 'CHAT'}
+          <Text style={[type.h2, {fontSize: 13, letterSpacing: 0.5}]} numberOfLines={1}>
+            {currentSessionTitle
+              ? currentSessionTitle.toUpperCase()
+              : (agent ? agent.name.toUpperCase() : 'CHAT')}
           </Text>
           <Text style={[type.monoMuted, {marginTop: 2, fontSize: 10}]}>
             {currentSession.slice(0, 8)}…
           </Text>
         </View>
+        {voice.minimaxSelected ? (
+          <TouchableOpacity
+            onPress={onOpenS2S}
+            style={{
+              width: 28, height: 28, marginRight: 8,
+              borderWidth: 1, borderColor: palette.border,
+              alignItems: 'center', justifyContent: 'center',
+            }}>
+            <WaveIcon size={14} color={palette.accent} />
+          </TouchableOpacity>
+        ) : null}
         {voice.minimaxSelected ? (
           <TouchableOpacity
             onPress={onToggleVoiceMode}
@@ -392,6 +545,24 @@ export default function ChatScreen() {
             agentPrefix={agentPrefix}
             fontFamily={fontFamily}
             ts={item.ts}
+            attachments={item.attachments}
+            isSpeaking={speakingIdx === index}
+            onSpeak={
+              voice.minimaxSelected && item.role === 'assistant'
+                ? () => {
+                    if (!voice.ready) {
+                      Alert.alert('Voice needs MiniMax', 'Add your MiniMax API key in Settings → AI to hear replies.');
+                      return;
+                    }
+                    setSpeakingIdx(index);
+                    void voice.speak(item.text);
+                  }
+                : undefined
+            }
+            onStopSpeak={() => {
+              setSpeakingIdx(null);
+              void voice.stopSpeaking();
+            }}
           />
         )}
         contentContainerStyle={{padding: spacing.lg, paddingBottom: 12}}
@@ -595,6 +766,17 @@ export default function ChatScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Speech-to-Speech immersive overlay */}
+      <SpeechToSpeechOverlay
+        visible={s2sOpen}
+        onClose={() => setS2sOpen(false)}
+        voice={voice}
+        sendPrompt={sendPrompt}
+        messages={messages}
+        streaming={streaming}
+        accent={accent}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -749,7 +931,11 @@ const Message: React.FC<{
   agentPrefix: string;
   fontFamily?: any;
   ts: number;
-}> = ({role, text, reasoning, usage, streaming, cursor, agentPrefix, fontFamily, ts}) => {
+  attachments?: Array<{kind: 'image' | 'file'; name: string; dataUri?: string; mime?: string}>;
+  isSpeaking?: boolean;
+  onSpeak?: () => void;
+  onStopSpeak?: () => void;
+}> = ({role, text, reasoning, usage, streaming, cursor, agentPrefix, fontFamily, ts, attachments, isSpeaking, onSpeak, onStopSpeak}) => {
   const {palette, spacing, type} = useTheme();
   const isUser = role === 'user';
   const cursorOpacity = streaming
@@ -773,6 +959,19 @@ const Message: React.FC<{
         {!isUser && !streaming && text ? (
           <>
             <View style={{flex: 1}} />
+            {onSpeak ? (
+              <TouchableOpacity
+                onPress={isSpeaking ? onStopSpeak : onSpeak}
+                hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}
+                style={{flexDirection: 'row', alignItems: 'center', padding: 2, marginRight: 12}}>
+                {isSpeaking
+                  ? <StopIcon size={11} color={palette.accent} filled />
+                  : <Volume2Icon size={11} color={palette.textDim} />}
+                <Text style={[type.monoMuted, {marginLeft: 4, color: isSpeaking ? palette.accent : palette.textDim, fontSize: 9, fontFamily}]}>
+                  {isSpeaking ? 'STOP' : 'SPEAK'}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
             <CopyButton text={text} fontFamily={fontFamily} />
           </>
         ) : null}
@@ -797,6 +996,25 @@ const Message: React.FC<{
         {streaming && !isUser ? (
           <Animated.Text style={{color: palette.accent, opacity: cursorOpacity, fontSize: 14, fontFamily}}>▍</Animated.Text>
         ) : null}
+        {/* User-attached images */}
+        {attachments && attachments.length
+          ? attachments
+              .filter(a => a.kind === 'image' && a.dataUri)
+              .map((a, idx) => <InlineImage key={`att-${idx}`} uri={a.dataUri as string} />)
+          : null}
+        {/* Assistant-generated media (images / audio detected in the reply) */}
+        {!isUser && !streaming && text
+          ? (() => {
+              const media = extractMedia(text);
+              if (!media.images.length && !media.audios.length) return null;
+              return (
+                <>
+                  {media.images.map((u, idx) => <InlineImage key={`img-${idx}`} uri={u} />)}
+                  {media.audios.map((u, idx) => <InlineAudio key={`aud-${idx}`} uri={u} fontFamily={fontFamily} />)}
+                </>
+              );
+            })()
+          : null}
       </View>
     </View>
   );

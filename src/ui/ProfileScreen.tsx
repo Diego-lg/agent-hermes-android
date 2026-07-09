@@ -30,7 +30,7 @@ export default function ProfileScreen() {
         <View style={{marginTop: spacing.lg}}>
           <Text style={type.label}>CONNECTION</Text>
           <Row label="HOST" value={`${config.host}:${config.port}`} />
-          <Row label="USER" value={config.username} />
+          <Row label="AUTH" value={config.password ? 'BASIC' : 'OPEN  ·  passwordless'} />
           <Row label="STATUS" value={serverOnline ? 'ONLINE' : 'OFFLINE'} accent={serverOnline ? palette.success : palette.error} last />
         </View>
 

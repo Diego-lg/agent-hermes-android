@@ -48,6 +48,8 @@ export interface ChatEngine {
   attachFile?(sessionId: string, payload: {name: string; content: string; mime?: string}): Promise<void>;
   /** Best-effort: attach an image to a session. */
   attachImage?(sessionId: string, payload: {name: string; data: string; mime?: string}): Promise<void>;
+  /** Best-effort: rename a session (used for auto-generated titles). */
+  setSessionTitle?(sessionId: string, title: string): Promise<void>;
   /** Free any sockets / timers. */
   disconnect(): void;
 }
@@ -128,6 +130,10 @@ export class HermesEngine implements ChatEngine {
 
   async attachImage(sessionId: string, payload: {name: string; data: string; mime?: string}) {
     return this.client.attachImage(sessionId, payload);
+  }
+
+  async setSessionTitle(sessionId: string, title: string) {
+    return this.client.setSessionTitle(sessionId, title);
   }
 
   async setActiveProject(projectId: string | null) {
@@ -416,6 +422,12 @@ export class MinimaxEngine implements ChatEngine {
     if (this.sessionCache.find(s => s.id === sid)) this.currentSessionId = sid;
   }
 
+  /** Rename a locally-stored session (auto-title). */
+  async setSessionTitle(sessionId: string, title: string): Promise<void> {
+    const s = this.sessionCache.find(x => x.id === sessionId);
+    if (s) { s.title = title; await this.persistCache(); }
+  }
+
   async listSessions(): Promise<LocalSession[]> {
     if (this.sessionCache.length === 0) await this.loadCache();
     return this.sessionCache;
@@ -463,21 +475,29 @@ export class MinimaxEngine implements ChatEngine {
       rejectDone = rej;
     });
 
-    // Append the user turn to the local cache before we send.
-    // Drain any pending file/image attachments and inline them into the
-    // outgoing message so the cloud model API actually has the content
-    // to reason over. The user-facing chat still sees only the user's
-    // original text.
-    const pending = this.takePending(sid);
-    let outboundText = text;
-    if (pending.length) {
-      const blocks = pending.map(p => {
-        if (p.kind === 'image') {
-          return `[attachment: image ${p.name}]\n${p.content}`;
-        }
-        return `[attachment: file ${p.name} · ${p.mime ?? 'text/plain'}]\n${p.content}`;
+    // Build the outbound user turn. Files are inlined as text; images are
+    // sent as OpenAI-style multimodal `image_url` parts (data URIs) so
+    // vision-capable MiniMax models actually receive the pixels. The
+    // user-facing chat still stores only the plain text.
+    const atts = opts?.attachments ?? [];
+    const files = atts.filter(a => a.kind === 'file' && a.content);
+    const imgs = atts.filter(a => a.kind === 'image' && a.dataUri);
+    let textPart = text;
+    if (files.length) {
+      const blocks = files.map(f => {
+        const body = (f.content ?? '').length > 16_000
+          ? (f.content ?? '').slice(0, 16_000) + '\n\n[…truncated at 16 KB…]'
+          : (f.content ?? '');
+        return `[attachment: file ${f.name} · ${f.mime ?? 'text/plain'}]\n${body}`;
       });
-      outboundText = `${text}\n\n${blocks.join('\n\n')}`;
+      textPart = `${text}\n\n${blocks.join('\n\n')}`;
+    }
+    let userContent: any = textPart;
+    if (imgs.length) {
+      userContent = [
+        {type: 'text', text: textPart},
+        ...imgs.map(im => ({type: 'image_url', image_url: {url: im.dataUri as string}})),
+      ];
     }
     sess.messages.push({role: 'user', text, ts: Date.now()});
     void this.persistCache();
@@ -513,7 +533,7 @@ export class MinimaxEngine implements ChatEngine {
           body: JSON.stringify({
             model: this.cfg.model,
             stream: true,
-            messages: history.concat([{role: 'user', content: outboundText}]),
+            messages: history.concat([{role: 'user', content: userContent}]),
           }),
         });
         if (!r.ok) {
@@ -645,15 +665,60 @@ export class MinimaxEngine implements ChatEngine {
  * --------------------------------------------------------------------------*/
 
 import {AppConfig} from './configStore';
+import {ProviderConfig} from './providerConfigsStore';
 
-export function pickMinimaxCfg(cfg: AppConfig): MinimaxConfig | null {
-  const key = cfg.modelApiKey?.trim();
-  if (!key) return null;
-  const groupId = cfg.modelGroupId?.trim();
-  return {
-    apiKey: key,
-    baseUrl: cfg.modelBaseUrl?.trim() || 'https://api.minimax.io/v1',
-    model: cfg.modelId?.trim() || 'MiniMax-Text-01',
-    groupId: groupId || undefined,
-  };
+/**
+ * Resolve a usable minimax (cloud) engine config from BOTH the legacy
+ * single-provider AppConfig slot (`modelApiKey` / `modelBaseUrl`) and
+ * the new multi-provider system (`providerConfigs.minimax`). Whichever
+ * has a key wins; if both have one the legacy one takes precedence so
+ * the existing settings don't get surprised by an unrelated provider
+ * update.
+ *
+ * Returns `null` when nothing usable is configured — that's the signal
+ * for "no mobile-cloud engine available, prompt the user".
+ */
+export function pickMinimaxCfg(
+  cfg: AppConfig,
+  providers?: Record<string, ProviderConfig>,
+): MinimaxConfig | null {
+  // 1. Legacy single-provider slot.
+  const legacyKey = cfg.modelApiKey?.trim();
+  if (legacyKey) {
+    const groupId = cfg.modelGroupId?.trim();
+    return {
+      apiKey: legacyKey,
+      baseUrl: cfg.modelBaseUrl?.trim() || 'https://api.minimax.io/v1',
+      model: cfg.modelId?.trim() || 'MiniMax-Text-01',
+      groupId: groupId || undefined,
+    };
+  }
+
+  // 2. New multi-provider system — pull the minimax entry if it has a
+  //    key. We deliberately don't gate on `enabled` because the user
+  //    may have toggled it off momentarily while editing a different
+  //    provider; if a key is present we can still try.
+  //
+  //    The provider map's keys are stored as the provider catalog id
+  //    ("MiniMax" capital-M) but new local lookups were matching
+  //    lowercase — fall back to scanning all entries whose
+  //    `providerId` matches `minimax` case-insensitively. Also
+  //    matches the legacy `MiniMax` key so existing saved configs
+  //    "just work" after an APK upgrade.
+  const lc = (s: string) => s.toLowerCase();
+  const minimaxEntry =
+    providers?.[lc('minimax')] ??
+    providers?.[lc('MiniMax')] ??
+    (providers
+      ? Object.values(providers).find(e => lc(e.providerId ?? '') === lc('minimax'))
+      : undefined);
+  if (minimaxEntry?.apiKey) {
+    return {
+      apiKey: minimaxEntry.apiKey,
+      baseUrl: minimaxEntry.baseUrl?.trim() || 'https://api.minimax.io/v1',
+      model: cfg.modelId?.trim() || 'MiniMax-Text-01',
+      groupId: cfg.modelGroupId?.trim() || undefined,
+    };
+  }
+  return null;
 }

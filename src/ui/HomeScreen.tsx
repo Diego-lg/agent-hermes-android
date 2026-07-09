@@ -9,13 +9,17 @@ import {useTheme} from './theme.tsx';
 import {PlusIcon, RefreshIcon, ChevronRightIcon} from './icons';
 import {AGENT_CATALOG} from '../agents/catalog';
 import YoloBanner from './YoloBanner';
+import DiscoveredBanner from './DiscoveredBanner';
+import {useDiscoveredHosts} from '../api/useDiscoveredHosts';
 
 export default function HomeScreen() {
   const {
     engine, engineClient, serverOnline, engineLabel, config,
     sessions, refreshSessions, setScreen, openOrCreateSession,
     currentSession, setCurrentSession, setMessages, switchEngine,
+    connectionError, retryConnect, setConfig,
   } = useApp();
+  const discovered = useDiscoveredHosts(config.host ?? '192.168.18.54', config.port ?? 9119);
   const {palette, spacing, type, radii} = useTheme();
   const [refreshing, setRefreshing] = useState(false);
   const [usage, setUsage] = useState<{input: number; output: number; context_percent: number} | null>(null);
@@ -99,6 +103,22 @@ export default function HomeScreen() {
         {/* YOLO / independent-mode banner. Tap to jump to the full YOLO screen. */}
         <YoloBanner onPress={() => setScreen('yolo')} />
 
+        {/* LAN-discovered Hermes instances. Tap one to switch + reconnect. */}
+        <DiscoveredBanner
+          hosts={discovered.hosts}
+          loading={discovered.loading}
+          lastScanAt={discovered.lastScanAt}
+          activeHost={config.host ?? ''}
+          activePort={config.port ?? 9119}
+          onRefresh={() => void discovered.refresh()}
+          onSwitch={(host, port) => {
+            // Optimistically update config + retry; the engine effect in
+            // AppContext will tear down the old socket and rebuild.
+            setConfig({...config, host, port});
+            void retryConnect();
+          }}
+        />
+
         {/* Greeting */}
         <Text style={[type.display, {marginTop: spacing.sm}]}>
           {greeting}
@@ -142,9 +162,70 @@ export default function HomeScreen() {
         {/* Hairline rule */}
         <View style={{height: 1, backgroundColor: palette.border, marginTop: spacing.xl}} />
 
+        {/* Connection-state banner — surfaces when there's no engine so
+            the user can see WHY tapping NEW CHAT didn't work, plus a
+            one-tap retry (or jump to Settings if everything's broken). */}
+        {!engine ? (
+          <View style={{
+            borderWidth: 1, borderColor: palette.highlight,
+            padding: spacing.md, marginBottom: spacing.md,
+          }}>
+            <Text style={[type.label, {color: palette.highlight}]}>
+              NOT CONNECTED
+            </Text>
+            <Text style={[type.body, {color: palette.textMuted, fontSize: 12, marginTop: 4}]}
+              numberOfLines={4}>
+              {connectionError
+                ? connectionError
+                : 'No engine active. Tap retry to probe the desktop server (or use the cloud model API).'}
+            </Text>
+            <View style={{flexDirection: 'row', marginTop: spacing.sm, gap: spacing.sm}}>
+              <TouchableOpacity
+                onPress={() => { void retryConnect(); }}
+                activeOpacity={0.7}
+                style={{
+                  paddingVertical: 8, paddingHorizontal: spacing.md,
+                  borderWidth: 1, borderColor: palette.accent,
+                }}>
+                <Text style={[type.h2, {color: palette.accent, fontSize: 11, letterSpacing: 0.5}]}>
+                  RETRY
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setScreen('settings')}
+                activeOpacity={0.6}
+                style={{
+                  paddingVertical: 8, paddingHorizontal: spacing.md,
+                  borderWidth: 1, borderColor: palette.border,
+                }}>
+                <Text style={[type.h2, {color: palette.textMuted, fontSize: 11, letterSpacing: 0.5}]}>
+                  SETTINGS
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : null}
+
         {/* New chat affordance */}
         <TouchableOpacity
-          onPress={() => { void openOrCreateSession().then(() => setScreen('chat')); }}
+          onPress={() => {
+            // openOrCreateSession now self-recovers: if the engine is
+            // null it triggers a fresh connect first. We still wrap
+            // the .then() in a .catch so a hard failure routes the
+            // user to Settings instead of leaving the tap un-acked.
+            void openOrCreateSession()
+              .then(() => setScreen('chat'))
+              .catch((e) => {
+                Alert.alert(
+                  'Chat unavailable',
+                  e?.message ?? 'No engine active. Add an API key in Settings → AI, or fix the desktop server.',
+                  [
+                    {text: 'Open Settings', onPress: () => setScreen('settings')},
+                    {text: 'Cancel', style: 'cancel'},
+                  ],
+                );
+              });
+          }}
           activeOpacity={0.7}
           style={{
             flexDirection: 'row', alignItems: 'center',
@@ -177,7 +258,20 @@ export default function HomeScreen() {
               <TouchableOpacity
                 key={a.id}
                 activeOpacity={0.6}
-                onPress={() => { void openOrCreateSession(a.id).then(() => setScreen('chat')); }}
+                onPress={() => {
+                  void openOrCreateSession(a.id)
+                    .then(() => setScreen('chat'))
+                    .catch((e) => {
+                      Alert.alert(
+                        'Chat unavailable',
+                        e?.message ?? 'No engine active. Add an API key in Settings → AI, or fix the desktop server.',
+                        [
+                          {text: 'Open Settings', onPress: () => setScreen('settings')},
+                          {text: 'Cancel', style: 'cancel'},
+                        ],
+                      );
+                    });
+                }}
                 style={{
                   flex: 1, paddingVertical: spacing.md, paddingRight: spacing.md,
                   borderRightWidth: i < 2 ? 1 : 0, borderRightColor: palette.border,

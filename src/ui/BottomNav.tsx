@@ -21,12 +21,13 @@ import {
   BotIcon, BotFilled, SettingsIcon, SettingsFilled, UserIcon, UserFilled,
   FileTextIcon, ClockIcon, ChevronRightIcon, RefreshIcon, HashIcon,
   CpuIcon, LayersIcon, BookmarkIcon, FolderIcon, DatabaseIcon,
-  ChartBarIcon, ServerIcon, XIcon,
+  ChartBarIcon, ServerIcon, XIcon, UsersIcon, SparklesIcon,
 } from './icons';
 
 export type Tab =
   | 'home' | 'chat' | 'sessions' | 'models' | 'agents' | 'profiles'
-  | 'tasks' | 'skills' | 'workspace' | 'memory' | 'insights' | 'settings';
+  | 'tasks' | 'skills' | 'workspace' | 'memory' | 'insights' | 'settings'
+  | 'groupChat' | 'personalities';
 
 interface BottomNavProps {
   active: Tab;
@@ -54,6 +55,8 @@ const PRIMARY_TABS: TabDef[] = [
 
 const MORE_TABS: TabDef[] = [
   {id: 'agents',    label: 'AGENTS',    Icon: BotIcon,        IconActive: BotFilled},
+  {id: 'groupChat', label: 'GROUP',     Icon: UsersIcon,      IconActive: UsersIcon},
+  {id: 'personalities', label: 'PERSONAS', Icon: SparklesIcon, IconActive: SparklesIcon},
   {id: 'profiles',  label: 'PROFILES',  Icon: LayersIcon,     IconActive: LayersIcon},
   {id: 'skills',    label: 'SKILLS',    Icon: HashIcon,       IconActive: HashIcon},
   {id: 'workspace', label: 'WORKSPACE', Icon: FolderIcon,     IconActive: FolderIcon},

@@ -1,9 +1,11 @@
 /**
- * Persisted app config: Hermes server host, port, and last-used credentials.
+ * Persisted app config: Hermes server host, port, and any optional auth.
  *
- * Backed by the storage shim (memory now, AsyncStorage on device). For an MVP
- * the password lives in the same store as the host; a real release should
- * move it to the Android Keystore via react-native-keychain.
+ * Backed by AsyncStorage on device, an in-memory shim in tests. As of the
+ * "no login wall" change, `username`/`password` are optional and default
+ * to empty — the phone boots into the app and connects in passwordless
+ * mode. Set them in Settings → Connection if the desktop server has the
+ * basic-auth provider enabled and you want to send credentials.
  */
 import {kv, STORAGE_KEYS} from './storage';
 
@@ -29,8 +31,15 @@ export interface YoloCapabilities {
 export interface AppConfig {
   host: string;
   port: number;
-  username: string;
-  password: string;
+  /** Optional basic-auth username. Empty by default — no login wall. */
+  username?: string;
+  /**
+   * Optional basic-auth password. Empty by default. When empty, the
+   * client skips `/auth/password-login` and goes straight to ws-ticket.
+   * The desktop server in loopback / `--insecure` mode serves the ticket
+   * endpoint without a session cookie, so passwordless = direct entry.
+   */
+  password?: string;
   /** Direct OpenAI-compatible model API key (used when server is offline). */
   modelApiKey?: string;
   /** Base URL of the model API. Defaults to https://api.minimax.io/v1. */
@@ -54,8 +63,8 @@ export interface AppConfig {
 const DEFAULT_CONFIG: AppConfig = {
   host: '192.168.18.54',
   port: 9119,
-  username: 'diego',
-  password: 'Maggiemon',
+  username: '',
+  password: '',
   modelBaseUrl: 'https://api.minimax.io/v1',
   modelId: 'MiniMax-Text-01',
   engineMode: 'auto',

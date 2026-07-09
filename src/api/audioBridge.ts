@@ -11,6 +11,31 @@
  * After `npm install` + a native rebuild these light up automatically.
  */
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import {Platform, PermissionsAndroid} from 'react-native';
+
+/**
+ * Defensive runtime-permission gate for the recorder/mic (RECORD_AUDIO is a
+ * dangerous permission on Android; without it, react-native-audio-recorder-player's
+ * startRecorder and @react-native-voice/voice's start both fail silently with
+ * ERROR_INSUFFICIENT_PERMISSIONS / ERROR_CLIENT — the user sees nothing.
+ *
+ * We always go through `ensureMicPermission()` from the public functions below
+ * so any new caller doesn't have to remember the gotcha.
+ *
+ * On iOS the permission is declared by Info.plist and granted the first time
+ * the user is prompted — we report `true` so the call sites don't branch.
+ */
+export async function ensureMicPermission(): Promise<boolean> {
+  if (Platform.OS !== 'android') return true;
+  try {
+    const already = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO as any);
+    if (already) return true;
+    const res = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO as any);
+    return res === PermissionsAndroid.RESULTS.GRANTED;
+  } catch {
+    return false;
+  }
+}
 
 /* --------------------------- recorder / player --------------------------- */
 
@@ -122,6 +147,25 @@ export function isRecording(): boolean {
 let _voice: any = null;
 let _voiceTried = false;
 
+/**
+ * Defensive runtime-permission gate for the camera (CAMERA is a dangerous
+ * permission on Android). Same shape as ensureMicPermission — declared as a
+ * top-level export so the camera picker (and any future caller) can reuse
+ * the same logic without pulling in the audioBridge module's deps.
+ */
+export async function ensureCameraPermission(): Promise<boolean> {
+  const {PermissionsAndroid: PA, Platform: P} = require('react-native');
+  if (P !== 'android') return true;
+  try {
+    const already = await PA.check(PA.PERMISSIONS.CAMERA as any);
+    if (already) return true;
+    const res = await PA.request(PA.PERMISSIONS.CAMERA as any);
+    return res === PA.RESULTS.GRANTED;
+  } catch {
+    return false;
+  }
+}
+
 function getVoice(): any | null {
   if (_voiceTried) return _voice;
   _voiceTried = true;
@@ -144,16 +188,28 @@ export interface SttCallbacks {
   onResult?: (text: string) => void;
   onError?: (message: string) => void;
   onEnd?: () => void;
+  /** Raw mic RMS/dB value from the recognizer (Android onRmsChanged). */
+  onVolume?: (rawDb: number) => void;
   locale?: string;
 }
 
 let _listening = false;
 
 /** Begin on-device speech recognition. Wires callbacks and starts the engine.
- *  Voice-to-voice = STT here -> LLM turn -> TTS reply. */
+ *  Voice-to-voice = STT here -> LLM turn -> TTS reply.
+ *
+ *  Requires the runtime RECORD_AUDIO permission on Android — we request it
+ *  defensively before touching the recognizer so the system dialog actually
+ *  appears (only once across app sessions, since `check()` is hit first). */
 export async function startListening(cb: SttCallbacks): Promise<void> {
   const Voice = getVoice();
   if (!Voice) throw new Error('Speech recognition unavailable — rebuild the app after installing native modules.');
+  const granted = await ensureMicPermission();
+  if (!granted) {
+    _listening = false;
+    cb.onError?.('Microphone permission denied. Enable it in Android Settings → Apps → android-hermes → Permissions.');
+    return;
+  }
   Voice.onSpeechPartialResults = (e: any) => {
     const v = e?.value?.[0];
     if (typeof v === 'string') cb.onPartial?.(v);
@@ -165,6 +221,10 @@ export async function startListening(cb: SttCallbacks): Promise<void> {
   Voice.onSpeechError = (e: any) => {
     _listening = false;
     cb.onError?.(e?.error?.message ?? e?.error?.code ?? 'Speech recognition error');
+  };
+  Voice.onSpeechVolumeChanged = (e: any) => {
+    const v = Number(e?.value);
+    if (!Number.isNaN(v)) cb.onVolume?.(v);
   };
   Voice.onSpeechEnd = () => {
     _listening = false;

@@ -57,6 +57,10 @@ export default function SettingsScreen() {
   const [draft, setDraft] = useState(config);
   useEffect(() => { if (!editing) setDraft(config); }, [config, editing]);
   const [showPwd, setShowPwd] = useState(false);
+  // Auth editor is opt-in — tap the Auth row to open a username/password
+  // form. Defaults to passwordless / loopback mode, which is what the
+  // desktop server uses when running with `--insecure` on the LAN.
+  const [showAuth, setShowAuth] = useState(false);
   // AI engine section: a single editing pane for model key/base/model + mode toggle.
   const [aiEditing, setAiEditing] = useState(false);
   const [aiDraft, setAiDraft] = useState({
@@ -476,8 +480,9 @@ export default function SettingsScreen() {
         <Section index="02" title="CONNECTION">
           <Row index="00" label="Server" value={`${config.host}:${config.port}`}
             onPress={() => { setDraft(config); setEditing(true); }} />
-          <Row index="01" label="User" value={config.username}
-            onPress={() => { setDraft(config); setEditing(true); }} last />
+          <Row index="01" label="Auth"
+            value={config.password ? `BASIC  ·  ${config.username || 'user'}` : 'NONE  ·  open LAN'}
+            onPress={() => { setDraft(config); setShowAuth(s => !s); }} />
         </Section>
 
         {editing ? (
@@ -489,18 +494,43 @@ export default function SettingsScreen() {
             <Text style={[type.label, {marginBottom: spacing.md}]}>EDIT CONNECTION</Text>
             <Field label="Host" value={draft.host} onChangeText={v => setDraft({...draft, host: v})} autoCapitalize="none" />
             <Field label="Port" value={String(draft.port)} onChangeText={v => setDraft({...draft, port: parseInt(v, 10) || 9119})} keyboardType="number-pad" />
-            <Field label="Username" value={draft.username} onChangeText={v => setDraft({...draft, username: v})} autoCapitalize="none" />
+            <Text style={[type.monoMuted, {fontSize: 10, color: palette.textDim, marginTop: spacing.sm}]}>
+              Passwordless — open LAN mode. Set auth below only if your desktop server requires it.
+            </Text>
+            <View style={{flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md}}>
+              <TouchableOpacity onPress={onSave} style={{flex: 1, paddingVertical: 12, alignItems: 'center', backgroundColor: palette.accent}}>
+                <Text style={[type.h2, {color: palette.bg, fontSize: 12, letterSpacing: 0.5}]}>SAVE</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => { setEditing(false); setDraft(config); }} style={{flex: 1, paddingVertical: 12, alignItems: 'center', borderWidth: 1, borderColor: palette.border}}>
+                <Text style={[type.h2, {color: palette.text, fontSize: 12, letterSpacing: 0.5}]}>CANCEL</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : null}
+
+        {showAuth ? (
+          <View style={{
+            backgroundColor: palette.surface,
+            borderWidth: 1, borderColor: palette.border,
+            padding: spacing.lg, marginBottom: spacing.xl,
+          }}>
+            <Text style={[type.label, {marginBottom: spacing.md}]}>EDIT AUTH (optional)</Text>
+            <Text style={[type.monoMuted, {fontSize: 10, color: palette.textMuted, marginBottom: spacing.md}]}>
+              Leave BOTH blank for passwordless mode. Only set these if your desktop
+              Hermes server has the basic-auth provider active.
+            </Text>
+            <Field label="Username" value={draft.username ?? ''} onChangeText={v => setDraft({...draft, username: v})} autoCapitalize="none" />
             <View style={{position: 'relative'}}>
-              <Field label="Password" value={draft.password} onChangeText={v => setDraft({...draft, password: v})} secureTextEntry={!showPwd} autoCapitalize="none" />
+              <Field label="Password" value={draft.password ?? ''} onChangeText={v => setDraft({...draft, password: v})} secureTextEntry={!showPwd} autoCapitalize="none" />
               <TouchableOpacity onPress={() => setShowPwd(s => !s)} style={{position: 'absolute', right: 0, top: 28, padding: 8}}>
                 {showPwd ? <EyeOffIcon size={16} color={palette.textMuted} /> : <EyeIcon size={16} color={palette.textMuted} />}
               </TouchableOpacity>
             </View>
             <View style={{flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md}}>
               <TouchableOpacity onPress={onSave} style={{flex: 1, paddingVertical: 12, alignItems: 'center', backgroundColor: palette.accent}}>
-                <Text style={[type.h2, {color: palette.bg, fontSize: 12, letterSpacing: 0.5}]}>SAVE & CONNECT</Text>
+                <Text style={[type.h2, {color: palette.bg, fontSize: 12, letterSpacing: 0.5}]}>SAVE</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => { setEditing(false); setDraft(config); }} style={{flex: 1, paddingVertical: 12, alignItems: 'center', borderWidth: 1, borderColor: palette.border}}>
+              <TouchableOpacity onPress={() => { setShowAuth(false); setDraft(config); }} style={{flex: 1, paddingVertical: 12, alignItems: 'center', borderWidth: 1, borderColor: palette.border}}>
                 <Text style={[type.h2, {color: palette.text, fontSize: 12, letterSpacing: 0.5}]}>CANCEL</Text>
               </TouchableOpacity>
             </View>
